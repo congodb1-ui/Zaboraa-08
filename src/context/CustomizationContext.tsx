@@ -51,6 +51,7 @@ interface CustomizationContextType {
   isWatermarkModalOpen: boolean;
   setIsWatermarkModalOpen: (open: boolean) => void;
   verifyAdminPasscode: (passcode: string) => boolean;
+  signOutAdmin: () => void;
   updateWatermarkConfig: (cfg: Partial<WatermarkConfig>) => void;
   updateEnableHotspots: (enabled: boolean) => void;
   updateAdminSettings: (cfg: Partial<AdminSettings>) => void;
@@ -196,6 +197,13 @@ export const CustomizationProvider: React.FC<{ children: React.ReactNode }> = ({
       return true;
     }
     return false;
+  };
+
+  const signOutAdmin = () => {
+    setIsAdmin(false);
+    try {
+      localStorage.removeItem('zaboraa_admin_session');
+    } catch {}
   };
 
   const updateWatermarkConfig = (cfg: Partial<WatermarkConfig>) => {
@@ -611,6 +619,7 @@ export const CustomizationProvider: React.FC<{ children: React.ReactNode }> = ({
         isWatermarkModalOpen,
         setIsWatermarkModalOpen,
         verifyAdminPasscode,
+        signOutAdmin,
         updateWatermarkConfig,
         updateEnableHotspots,
         updateAdminSettings,

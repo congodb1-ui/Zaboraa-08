@@ -43,7 +43,6 @@ export const CreateDesignModal: React.FC<CreateDesignModalProps> = ({
   const [newCompDetails, setNewCompDetails] = useState('');
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [prompt, setPrompt] = useState('');
-  const [imageUrl, setImageUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -88,37 +87,32 @@ export const CreateDesignModal: React.FC<CreateDesignModalProps> = ({
   };
 
 
-  const handleGenerateImage = async () => {
-    if (!prompt.trim()) return;
+  const handleGenerateImage = async (overridePrompt?: string) => {
+    const promptToUse = (typeof overridePrompt === 'string' && overridePrompt.trim()) ? overridePrompt : prompt;
+    if (!promptToUse.trim()) return;
 
     setLoading(true);
     setError('');
     setImageUrl('');
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session ? session.access_token : null;
-      const userId = session ? session.user.id : 'congo-architect-session';
-
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-
-      const res = await fetch('http://localhost:3001/api/generate-image', {
+      const res = await fetch('/api/generate-blueprint', {
         method: 'POST',
-        headers,
-        body: JSON.stringify({ prompt, userId }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: promptToUse }),
       });
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to generate architecture schematic');
 
-      const imageSrc = data.imageUrl || `data:image/jpeg;base64,${data.image}`;
-      setImageUrl(imageSrc);
+      if (data.imageBase64) {
+        const imageSrc = `data:${data.mimeType || 'image/png'};base64,${data.imageBase64}`;
+        setImageUrl(imageSrc);
+      } else if (data.fallbackUrl) {
+        setImageUrl(data.fallbackUrl);
+      } else {
+        throw new Error('No image was returned from generator');
+      }
     } catch (err: any) {
       setError(err.message || 'An error occurred during generation');
     } finally {

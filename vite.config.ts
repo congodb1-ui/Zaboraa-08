@@ -11,7 +11,7 @@ const MODEL = 'gemini-3.1-flash-image';
 const FALLBACK_URL =
   '/assets/images/blueprint_3d_isometric_1791610246387.jpg';
 
-async function generateBlueprint(apiKey, prompt) {
+async function generateBlueprint(apiKey: string, prompt: string) {
   const ai = new GoogleGenAI({ apiKey });
 
   const interaction = await ai.interactions.create({
@@ -126,7 +126,7 @@ export default defineConfig(({ mode }) => {
               res.statusCode = 200;
               res.setHeader('Content-Type', 'application/json');
               res.end(JSON.stringify(result));
-            } catch (err) {
+            } catch (err: any) {
               console.error('Local blueprint generation failed:', {
                 message: err?.message,
                 status: err?.status,

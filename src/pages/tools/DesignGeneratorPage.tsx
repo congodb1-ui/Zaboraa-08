@@ -29,10 +29,49 @@ import {
   X,
   Zap,
   Clock,
-  ArrowRight
+  ArrowRight,
+  Save,
+  FileDown,
+  Link2,
+  Unlink,
+  GripVertical,
+  Activity,
+  Settings2
 } from 'lucide-react';
 import { useCustomization } from '../../context/CustomizationContext';
 import { GOOGLE_DRIVE_CONFIG } from '../../data/mediaAssets';
+import {
+  ArchitectureTemplateId,
+  CloudPlatformType,
+  EnvironmentNode,
+  EnvironmentRole,
+  DynamicTopologyModel,
+  InterconnectLink,
+  ImportedLegacyContext,
+  getDefaultEnvironmentsForTemplate,
+  getDefaultInterconnectLinksForTemplate,
+  hydrateFromLegacyStorage,
+  writebackLegacyStorage
+} from '../../types/multiCloudBlueprint';
+import {
+  VendorTextFallback,
+  AzureVirtualDesktopIcon,
+  AzureNetAppFilesIcon,
+  AzureFirewallIcon,
+  AzureExpressRouteIcon,
+  AzureVirtualWanIcon,
+  NutanixPrismIcon,
+  NutanixAhvIcon,
+  NutanixMoveIcon,
+  AwsTransitGatewayIcon,
+  AwsFsxOntapIcon,
+  GcpInterconnectIcon,
+  GcpNetAppVolumesIcon,
+  VmwareVcenterIcon,
+  VmwareHcxIcon,
+  PaloAltoNetworksNvaIcon,
+  FortinetFortiGateNvaIcon
+} from '../../components/icons/CloudArchitectureIcons';
 
 interface VlanSubsegment {
   vlanId: number;
@@ -105,52 +144,144 @@ export const DesignGeneratorPage: React.FC = () => {
   const [aiBlueprintResult, setAiBlueprintResult] = useState<AIBlueprintResult | null>(null);
   const [blueprint3DZoom, setBlueprint3DZoom] = useState<number>(1.0);
 
-  // Hydrate from RVTools or DR Planner or Sizing Tool
+  // Dynamic Multi-Cloud & Nutanix Architecture State (Milestone 2)
+  const [activeTemplate, setActiveTemplate] = useState<ArchitectureTemplateId>('avs');
+  const [topologyEnvironments, setTopologyEnvironments] = useState<EnvironmentNode[]>(() =>
+    getDefaultEnvironmentsForTemplate('avs')
+  );
+  const [interconnectLinks, setInterconnectLinks] = useState<InterconnectLink[]>(() =>
+    getDefaultInterconnectLinksForTemplate('avs')
+  );
+  const [importedLegacyContext, setImportedLegacyContext] = useState<ImportedLegacyContext>({});
+  const [saveSuccessNotice, setSaveSuccessNotice] = useState<string | null>(null);
+  const [activeCategoryTab, setActiveCategoryTab] = useState<'all' | 'nutanix' | 'sddc' | 'native' | 'migration'>('all');
+  const [canvasMode, setCanvasMode] = useState<'interactive' | 'static-vector'>('interactive');
+
+  // Interactive Canvas Interconnect & Inspector States
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [connectingSourceId, setConnectingSourceId] = useState<string | null>(null);
+  const [showLinkModal, setShowLinkModal] = useState<boolean>(false);
+  const [linkModalSourceId, setLinkModalSourceId] = useState<string>('');
+  const [linkModalTargetId, setLinkModalTargetId] = useState<string>('');
+  const [linkProtocol, setLinkProtocol] = useState<InterconnectLink['protocol']>('ExpressRoute FastPath');
+  const [linkBandwidth, setLinkBandwidth] = useState<number>(10);
+  const [linkRedundant, setLinkRedundant] = useState<boolean>(true);
+  const [linkNotes, setLinkNotes] = useState<string>('');
+  const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
+
+  // Mouse Dragging States
+  const [isDraggingNodeId, setIsDraggingNodeId] = useState<string | null>(null);
+  const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  const [conflictsResolvedList, setConflictsResolvedList] = useState<string[]>([]);
+  const [showAddEnvModal, setShowAddEnvModal] = useState<boolean>(false);
+  const [newEnvName, setNewEnvName] = useState<string>('');
+  const [newEnvPlatform, setNewEnvPlatform] = useState<CloudPlatformType>('Nutanix NC2 on Azure');
+  const [newEnvRole, setNewEnvRole] = useState<EnvironmentRole>('Disaster Recovery');
+  const [newEnvRegion, setNewEnvRegion] = useState<string>('Azure East US 2');
+  const [newEnvHosts, setNewEnvHosts] = useState<number>(4);
+  const [newEnvStorageTB, setNewEnvStorageTB] = useState<number>(60);
+  const [newEnvCidr, setNewEnvCidr] = useState<string>('10.240.0.0/22');
+
+  // Hydrate from RVTools or DR Planner or Sizing Tool with domain conflict resolution
   useEffect(() => {
     try {
       const blueprintState = localStorage.getItem('zaboraa_4k_blueprint_state');
       const drExport = localStorage.getItem('zaboraa_dr_export');
       const sizingExport = localStorage.getItem('zaboraa_sizing_export');
 
-      if (blueprintState) {
-        const parsed = JSON.parse(blueprintState);
-        if (parsed.totalVMs) setTotalVMCount(parsed.totalVMs);
-        if (parsed.customerName) setCustomerName(parsed.customerName);
-        if (parsed.totalStorageTB) setDecoupledStorageTB(parsed.decoupledStorageTB || Math.round(parsed.totalStorageTB * 0.7));
-        if (parsed.targetCloud) {
-          if (parsed.targetCloud.includes('AWS')) setCloudPlatform('VMware Cloud on AWS');
-          else if (parsed.targetCloud.includes('Google')) setCloudPlatform('Google Cloud VMware Engine');
-          else setCloudPlatform('Azure VMware Solution');
+      if (blueprintState || drExport || sizingExport) {
+        const { model, notice, conflictsResolved } = hydrateFromLegacyStorage(
+          blueprintState,
+          drExport,
+          sizingExport
+        );
+        setActiveTemplate(model.templateId);
+        setTopologyEnvironments(model.environments);
+        if (model.interconnectLinks && model.interconnectLinks.length > 0) {
+          setInterconnectLinks(model.interconnectLinks);
         }
-        if (parsed.nodeSku) {
-          const cleanSku = parsed.nodeSku.replace(/^AVS-/, '').replace(/^VMC-/, '').replace(/^GCVE-/, '');
-          setNodeSku(cleanSku);
+        setImportedLegacyContext(model.importedLegacyContext);
+        setCustomerName(model.customerName);
+        setArchitectName(model.architectName);
+        setDrEngine(model.resilience.replicationEngine);
+        setDrRpoMinutes(model.resilience.targetRpoMinutes);
+        setDrRtoMinutes(model.resilience.targetRtoMinutes);
+        setDrStrategy(
+          model.resilience.drTopology === 'Backup & Restore'
+            ? 'Cold Storage / On-Demand'
+            : model.resilience.drTopology === 'Warm Standby'
+            ? 'Hot Standby (Full Cluster)'
+            : 'Pilot Light (3-Node Minimum)'
+        );
+
+        // Map to existing legacy variables to ensure 100% backward-compatibility with SVG/Canvas
+        if (model.environments[0]) {
+          setTotalVMCount(model.environments[0].vmCount ?? Math.round(model.environments[0].totalVcpu / 2.5));
+          setEsxiHostCount(model.environments[0].hostCount);
+          setClusterCount(Math.max(1, Math.round(model.environments[0].hostCount / 6)));
         }
-        if (parsed.vlans && Array.isArray(parsed.vlans) && parsed.vlans.length > 0) {
-          setSubsegments(parsed.vlans.slice(0, 6).map((v: any, i: number) => ({
+        if (model.environments[1]) {
+          setDecoupledStorageTB(model.environments[1].storageTB);
+          setNodeSku(model.environments[1].nodeSku);
+          if (model.environments[1].platform.includes('AWS')) {
+            setCloudPlatform('VMware Cloud on AWS');
+          } else if (model.environments[1].platform.includes('Google') || model.environments[1].platform.includes('GCP')) {
+            setCloudPlatform('Google Cloud VMware Engine');
+          } else {
+            setCloudPlatform('Azure VMware Solution');
+          }
+        }
+
+        // Hydrate legacy VLANs if present in RVTools state
+        const parsedBlueprint = blueprintState ? JSON.parse(blueprintState) : null;
+        if (parsedBlueprint?.vlans && Array.isArray(parsedBlueprint.vlans) && parsedBlueprint.vlans.length > 0) {
+          setSubsegments(parsedBlueprint.vlans.slice(0, 6).map((v: any, i: number) => ({
             vlanId: v.vlanId || (i + 1) * 10,
             subnetCidr: `10.${v.vlanId || (i + 1) * 10}.10.0/24`,
             environment: (v.portGroup?.toLowerCase().includes('dev') ? 'Dev' : v.portGroup?.toLowerCase().includes('stg') ? 'Staging' : 'Prod') as 'Dev' | 'Staging' | 'Prod'
           })));
         }
-        setImportedNotice(`Hydrated from RVTools Ingestion: ${parsed.totalVMs} VMs, ${parsed.totalStorageTB} TiB Storage, ${parsed.targetCloud || 'AVS'} (${parsed.nodeSku || 'AV36P'}).`);
-      } else if (drExport) {
-        const parsed = JSON.parse(drExport);
-        if (parsed.vms) setTotalVMCount(parsed.vms);
-        if (parsed.storageTB) setDecoupledStorageTB(Math.round(parsed.storageTB * 0.6));
-        if (parsed.engine) setDrEngine(parsed.engine);
-        if (parsed.rpoMin) setDrRpoMinutes(parsed.rpoMin);
-        if (parsed.rtoMin) setDrRtoMinutes(parsed.rtoMin);
-        if (parsed.strategy) setDrStrategy(parsed.strategy === 'coldStorage' ? 'Cold Storage / On-Demand' : parsed.strategy === 'pilotLight' ? 'Pilot Light (3-Node Minimum)' : 'Hot Standby (Full Cluster)');
-        setImportedNotice(`Hydrated from DR Planner: ${parsed.vms} protected VMs, ${parsed.storageTB} TB footprint, ${parsed.engine} (${parsed.rpoMin}m RPO).`);
-      } else if (sizingExport) {
-        const parsed = JSON.parse(sizingExport);
-        if (parsed.vms) setTotalVMCount(parsed.vms);
-        if (parsed.decoupledStorageTB) setDecoupledStorageTB(parsed.decoupledStorageTB);
-        setImportedNotice(`Hydrated from Sizing Estimator: ${parsed.vms} VMs, ${parsed.decoupledStorageTB} TB external storage.`);
+
+        setImportedNotice(notice);
+        setConflictsResolvedList(conflictsResolved);
       }
-    } catch {}
+    } catch (err) {
+      console.warn('Hydration exception:', err);
+    }
   }, []);
+
+  // Explicit non-destructive writeback (STRICT BOUNDARY: only triggered on explicit Save or Export Blueprint/BOM actions)
+  const handlePersistLegacyState = () => {
+    if (topologyEnvironments && topologyEnvironments.length > 0) {
+      const updatedEnvs = [...topologyEnvironments];
+      if (updatedEnvs[0]) {
+        updatedEnvs[0].vmCount = totalVMCount;
+      }
+      const activeModel: DynamicTopologyModel = {
+        templateId: activeTemplate,
+        customerName,
+        architectName,
+        projectDate,
+        environments: updatedEnvs,
+        interconnectLinks,
+        resilience: {
+          drTopology: drStrategy.includes('Cold') ? 'Backup & Restore' : drStrategy.includes('Hot') ? 'Warm Standby' : 'Pilot Light',
+          targetRpoMinutes: drRpoMinutes,
+          targetRtoMinutes: drRtoMinutes,
+          replicationMode: drRpoMinutes <= 1 ? 'Synchronous' : 'Asynchronous',
+          replicationEngine: drEngine,
+          failoverMode: 'Orchestrated Runbook',
+          failbackApproach: 'Reverse Delta Sync'
+        },
+        activeServiceIds: [],
+        importedLegacyContext: importedLegacyContext || {}
+      };
+      writebackLegacyStorage(activeModel);
+      setSaveSuccessNotice('Blueprint state saved successfully. Legacy localStorage synchronized non-destructively.');
+      setTimeout(() => setSaveSuccessNotice(null), 4000);
+    }
+  };
 
   // Update Node SKU options when cloud platform changes
   useEffect(() => {
@@ -162,6 +293,343 @@ export const DesignGeneratorPage: React.FC = () => {
       setNodeSku('ve1-standard-72');
     }
   }, [cloudPlatform]);
+
+  const handleSelectTemplate = (template: ArchitectureTemplateId) => {
+    setActiveTemplate(template);
+    const newEnvs = getDefaultEnvironmentsForTemplate(template);
+    const newLinks = getDefaultInterconnectLinksForTemplate(template);
+    setTopologyEnvironments(newEnvs);
+    setInterconnectLinks(newLinks);
+    setSelectedNodeId(null);
+    setConnectingSourceId(null);
+
+    if (template === 'nutanix-onprem') {
+      setCloudPlatform('Azure VMware Solution');
+      setDrEngine('Nutanix Protection Domains (NearSync)');
+      setDrRpoMinutes(15);
+      setDrRtoMinutes(30);
+      setDrStrategy('Warm Standby (Full Cluster)');
+    } else if (template === 'nutanix-to-nc2') {
+      setCloudPlatform('Azure VMware Solution');
+      setDrEngine('Nutanix Move / Prism Pairing');
+      setNodeSku('AN36P');
+      setDrRpoMinutes(15);
+      setDrRtoMinutes(60);
+      setDrStrategy('Pilot Light (3-Node Minimum)');
+    } else if (template === 'vmware-to-nc2') {
+      setCloudPlatform('Azure VMware Solution');
+      setDrEngine('Nutanix Move Cross-Hypervisor');
+      setNodeSku('AN36P');
+      setDrRpoMinutes(15);
+      setDrRtoMinutes(60);
+      setDrStrategy('Pilot Light (3-Node Minimum)');
+    } else if (template === 'avs') {
+      setCloudPlatform('Azure VMware Solution');
+      setDrEngine('VMware SRM + vSphere Replication');
+      setNodeSku('AV36P');
+      setDrRpoMinutes(5);
+      setDrRtoMinutes(20);
+      setDrStrategy('Pilot Light (3-Node Minimum)');
+    } else if (template === 'vmc-aws') {
+      setCloudPlatform('VMware Cloud on AWS');
+      setDrEngine('VMware HCX Bulk / Replication');
+      setNodeSku('i4i.metal');
+      setDrRpoMinutes(15);
+      setDrRtoMinutes(30);
+      setDrStrategy('Pilot Light (3-Node Minimum)');
+    } else if (template === 'gcve') {
+      setCloudPlatform('Google Cloud VMware Engine');
+      setDrEngine('VMware HCX / Google Cloud Interconnect');
+      setNodeSku('ve1-standard-72');
+      setDrRpoMinutes(15);
+      setDrRtoMinutes(30);
+      setDrStrategy('Pilot Light (3-Node Minimum)');
+    } else if (template === 'aws-native') {
+      setCloudPlatform('VMware Cloud on AWS');
+      setDrEngine('AWS Direct Connect + AWS DMS');
+      setNodeSku('AWS Native VPC Hub');
+      setDrRpoMinutes(15);
+      setDrRtoMinutes(30);
+      setDrStrategy('Warm Standby (Full Cluster)');
+    } else if (template === 'gcp-native') {
+      setCloudPlatform('Google Cloud VMware Engine');
+      setDrEngine('Google Cloud Partner Interconnect');
+      setNodeSku('Shared VPC Host Project');
+      setDrRpoMinutes(15);
+      setDrRtoMinutes(30);
+      setDrStrategy('Warm Standby (Full Cluster)');
+    } else if (template === 'multi-cloud') {
+      setCloudPlatform('Azure VMware Solution');
+      setDrEngine('Multi-Cloud Cross-Replication');
+      setNodeSku('AV36P');
+      setDrRpoMinutes(15);
+      setDrRtoMinutes(45);
+      setDrStrategy('Hot Standby (Full Cluster)');
+    }
+  };
+
+  // IPv4 CIDR validation helper (supports /0 through /32 with strict octet checking)
+  const isValidIpv4Cidr = (cidr: string): boolean => {
+    const trimmed = cidr.trim();
+    if (!trimmed) return true; // Optional if blank
+    const match = trimmed.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/);
+    if (!match) return false;
+    const [, o1, o2, o3, o4, prefix] = match;
+    const octets = [Number(o1), Number(o2), Number(o3), Number(o4)];
+    for (const oct of octets) {
+      if (oct < 0 || oct > 255) return false;
+    }
+    const prefixNum = Number(prefix);
+    return prefixNum >= 0 && prefixNum <= 32;
+  };
+
+  // Form field validation computations for Add New Environment modal
+  const trimmedEnvName = newEnvName.trim();
+  const isEnvNameEmpty = trimmedEnvName.length === 0;
+  const isEnvNameDuplicate = Boolean(
+    trimmedEnvName &&
+      topologyEnvironments.some(
+        env => env.name.trim().toLowerCase() === trimmedEnvName.toLowerCase()
+      )
+  );
+  const trimmedCidr = newEnvCidr.trim();
+  const isCidrFormatInvalid = Boolean(trimmedCidr.length > 0 && !isValidIpv4Cidr(trimmedCidr));
+
+  // Determine if host count is valid (>= 0, integer, finite; native hub environments allow 0)
+  const isHostCountValid =
+    Number.isInteger(newEnvHosts) &&
+    !isNaN(newEnvHosts) &&
+    (newEnvPlatform === 'AWS Native' || newEnvPlatform === 'GCP Native' ? newEnvHosts >= 0 : newEnvHosts >= 1);
+
+  // Storage valid: positive number
+  const isStorageValid = !isNaN(newEnvStorageTB) && newEnvStorageTB > 0;
+
+  // Overall form validity
+  const isAddEnvFormValid =
+    !isEnvNameEmpty &&
+    !isEnvNameDuplicate &&
+    !isCidrFormatInvalid &&
+    isHostCountValid &&
+    isStorageValid;
+
+  const handleAddEnvironment = () => {
+    if (!isAddEnvFormValid) return;
+
+    // Platform-specific node SKU calculation
+    const derivedSku = newEnvPlatform.includes('NC2')
+      ? 'AN36P'
+      : newEnvPlatform.includes('AVS')
+      ? 'AV36P'
+      : newEnvPlatform.includes('AWS')
+      ? (newEnvHosts === 0 ? 'AWS Native VPC Hub' : 'i4i.metal')
+      : newEnvPlatform.includes('Google') || newEnvPlatform.includes('GCP')
+      ? (newEnvHosts === 0 ? 'Google Cloud Native Hub' : 've1-standard-72')
+      : 'NX-8170-G9';
+
+    const derivedTier: 'source' | 'transit' | 'target' =
+      newEnvRole === 'Production' ? 'source' : newEnvRole === 'Shared Services' ? 'transit' : 'target';
+
+    const tierCount = topologyEnvironments.filter(e => e.tier === derivedTier).length;
+    const defaultX = derivedTier === 'source' ? 80 : derivedTier === 'transit' ? 430 : 780;
+    const defaultY = 120 + tierCount * 180;
+
+    const newEnv: EnvironmentNode = {
+      id: `env-${Date.now()}`,
+      name: trimmedEnvName,
+      platform: newEnvPlatform,
+      role: newEnvRole,
+      region: newEnvRegion.trim() || 'Custom Region',
+      hostCount: Math.max(0, newEnvHosts),
+      nodeSku: derivedSku,
+      totalVcpu: Math.max(0, newEnvHosts) * 36,
+      totalRamGB: Math.max(0, newEnvHosts) * 576,
+      storageTB: Math.max(0, newEnvStorageTB),
+      cidrBlock: trimmedCidr || '10.240.0.0/22',
+      // Explicit requirement: Add as unlinked zone until connected in topology view
+      connectedEnvironmentIds: [],
+      tier: derivedTier,
+      x: defaultX,
+      y: defaultY,
+      notes: `${newEnvRole} node group on ${newEnvPlatform}`
+    };
+
+    setTopologyEnvironments(prev => [...prev, newEnv]);
+    setShowAddEnvModal(false);
+    // Reset modal state
+    setNewEnvName('');
+    setNewEnvRegion('Azure East US 2');
+    setNewEnvHosts(4);
+    setNewEnvStorageTB(60);
+    setNewEnvCidr('10.240.0.0/22');
+  };
+
+  const handleRemoveEnvironment = (idToRemove: string) => {
+    if (topologyEnvironments.length <= 1) return;
+    setTopologyEnvironments(prev => prev.filter(e => e.id !== idToRemove));
+    setInterconnectLinks(prev => prev.filter(l => l.sourceId !== idToRemove && l.targetId !== idToRemove));
+    if (selectedNodeId === idToRemove) setSelectedNodeId(null);
+  };
+
+  // Interactive Canvas Mouse Dragging & Coordinate Persistence
+  const handleNodeMouseDown = (e: React.MouseEvent, node: EnvironmentNode) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('button') || target.closest('input') || target.closest('select')) return;
+    setIsDraggingNodeId(node.id);
+    const currX = node.x ?? 80;
+    const currY = node.y ?? 120;
+    setDragOffset({ x: e.clientX - currX, y: e.clientY - currY });
+  };
+
+  const handleCanvasMouseMove = (e: React.MouseEvent) => {
+    if (!isDraggingNodeId) return;
+    const newX = Math.max(20, Math.min(1000, e.clientX - dragOffset.x));
+    const newY = Math.max(40, Math.min(520, e.clientY - dragOffset.y));
+    setTopologyEnvironments(prev =>
+      prev.map(n => (n.id === isDraggingNodeId ? { ...n, x: newX, y: newY } : n))
+    );
+  };
+
+  const handleCanvasMouseUp = () => {
+    setIsDraggingNodeId(null);
+  };
+
+  // Interactive Click-to-Connect Interconnect Links
+  const handleStartConnect = (sourceId: string) => {
+    if (connectingSourceId === sourceId) {
+      setConnectingSourceId(null);
+    } else {
+      setConnectingSourceId(sourceId);
+    }
+  };
+
+  const handleFinishConnect = (targetId: string) => {
+    if (!connectingSourceId || connectingSourceId === targetId) return;
+    setLinkModalSourceId(connectingSourceId);
+    setLinkModalTargetId(targetId);
+    setEditingLinkId(null);
+    setLinkProtocol('ExpressRoute FastPath');
+    setLinkBandwidth(10);
+    setLinkRedundant(true);
+    setLinkNotes('');
+    setShowLinkModal(true);
+    setConnectingSourceId(null);
+  };
+
+  const handleOpenEditLink = (link: InterconnectLink) => {
+    setLinkModalSourceId(link.sourceId);
+    setLinkModalTargetId(link.targetId);
+    setEditingLinkId(link.id);
+    setLinkProtocol(link.protocol);
+    setLinkBandwidth(link.bandwidthGbps);
+    setLinkRedundant(link.redundant ?? true);
+    setLinkNotes(link.notes ?? '');
+    setShowLinkModal(true);
+  };
+
+  const handleSaveLink = () => {
+    if (!linkModalSourceId || !linkModalTargetId) return;
+    if (editingLinkId) {
+      setInterconnectLinks(prev =>
+        prev.map(l =>
+          l.id === editingLinkId
+            ? {
+                ...l,
+                protocol: linkProtocol,
+                bandwidthGbps: linkBandwidth,
+                redundant: linkRedundant,
+                notes: linkNotes
+              }
+            : l
+        )
+      );
+    } else {
+      const newLink: InterconnectLink = {
+        id: `link-${Date.now()}`,
+        sourceId: linkModalSourceId,
+        targetId: linkModalTargetId,
+        protocol: linkProtocol,
+        bandwidthGbps: linkBandwidth,
+        status: 'active',
+        redundant: linkRedundant,
+        notes: linkNotes || `${linkProtocol} link between environments`
+      };
+      setInterconnectLinks(prev => [...prev, newLink]);
+      setTopologyEnvironments(prev =>
+        prev.map(n => {
+          if (n.id === linkModalSourceId && !n.connectedEnvironmentIds.includes(linkModalTargetId)) {
+            return { ...n, connectedEnvironmentIds: [...n.connectedEnvironmentIds, linkModalTargetId] };
+          }
+          if (n.id === linkModalTargetId && !n.connectedEnvironmentIds.includes(linkModalSourceId)) {
+            return { ...n, connectedEnvironmentIds: [...n.connectedEnvironmentIds, linkModalSourceId] };
+          }
+          return n;
+        })
+      );
+    }
+    setShowLinkModal(false);
+  };
+
+  const handleDeleteLink = (linkId: string) => {
+    const linkToDelete = interconnectLinks.find(l => l.id === linkId);
+    if (linkToDelete) {
+      setTopologyEnvironments(prev =>
+        prev.map(n => {
+          if (n.id === linkToDelete.sourceId) {
+            return { ...n, connectedEnvironmentIds: n.connectedEnvironmentIds.filter(id => id !== linkToDelete.targetId) };
+          }
+          if (n.id === linkToDelete.targetId) {
+            return { ...n, connectedEnvironmentIds: n.connectedEnvironmentIds.filter(id => id !== linkToDelete.sourceId) };
+          }
+          return n;
+        })
+      );
+    }
+    setInterconnectLinks(prev => prev.filter(l => l.id !== linkId));
+    setShowLinkModal(false);
+  };
+
+  const handleUpdateNodeSpec = (nodeId: string, updates: Partial<EnvironmentNode>) => {
+    setTopologyEnvironments(prev =>
+      prev.map(n => (n.id === nodeId ? { ...n, ...updates } : n))
+    );
+  };
+
+  const getPlatformResilienceWarnings = () => {
+    const warnings: { type: 'info' | 'warning'; text: string }[] = [];
+    const hasNutanix = topologyEnvironments.some(e => e.platform.includes('Nutanix'));
+    const hasVmware = topologyEnvironments.some(e => e.platform.includes('VMware'));
+    const hasNc2 = topologyEnvironments.some(e => e.platform.includes('NC2'));
+
+    if (hasNutanix && drRpoMinutes <= 1) {
+      warnings.push({
+        type: 'warning',
+        text: 'Nutanix Metro Availability (Near-Zero RPO) requires sub-5ms round-trip network latency (RTT) between sites and an independent Witness VM.'
+      });
+    }
+
+    if (hasVmware && !hasNutanix && drRpoMinutes <= 1) {
+      warnings.push({
+        type: 'warning',
+        text: 'VMware vSphere Metro Storage Cluster (vMSC) requires synchronous storage replication with vendor-certified array links and round-trip latency under 5ms (or 10ms with certified vMSC).'
+      });
+    }
+
+    if (hasVmware && hasNc2) {
+      warnings.push({
+        type: 'info',
+        text: 'Cross-Hypervisor Migration (VMware ESXi to Nutanix AHV) utilizes Nutanix Move. Prerequisite: Guest OS VirtIO driver injection and non-disruptive snapshot seeding.'
+      });
+    }
+
+    if (drStrategy.toLowerCase().includes('pilot light')) {
+      warnings.push({
+        type: 'info',
+        text: 'Pilot Light topology: BareMetal host reservation or cloud provider quota pre-approval is required to scale from standby to full production capacity during a disaster.'
+      });
+    }
+
+    return warnings;
+  };
 
   const effectiveMgmtCidr = mgmtCidrInput.trim() || '10.240.0.0/22';
   const calculatedCloudNodes = Math.max(3, Math.ceil(totalVMCount / (nodeSku.includes('64') || nodeSku.includes('i4i') ? 70 : 45)));
@@ -423,7 +891,7 @@ export const DesignGeneratorPage: React.FC = () => {
     ctx.setLineDash([]);
   };
 
-  // Export 4K Canvas Image
+  // Export 4K Canvas Image (STRICT BOUNDARY: pure render and download, ZERO localStorage writes)
   const handleExport4K = (format: 'png' | 'jpeg') => {
     const offscreen = document.createElement('canvas');
     draw4KCanvas(offscreen);
@@ -433,8 +901,53 @@ export const DesignGeneratorPage: React.FC = () => {
     link.click();
   };
 
-  // Export BOM to Excel
+  // Export Complete Multi-Cloud Blueprint (JSON) - Explicit Export Action (Syncs legacy state)
+  const handleExportBlueprintJSON = () => {
+    handlePersistLegacyState();
+    const updatedEnvs = [...topologyEnvironments];
+    if (updatedEnvs[0]) {
+      updatedEnvs[0].vmCount = totalVMCount;
+    }
+    const exportPayload: DynamicTopologyModel = {
+      templateId: activeTemplate,
+      customerName,
+      architectName,
+      projectDate,
+      environments: updatedEnvs,
+      interconnectLinks,
+      resilience: {
+        drTopology: drStrategy.includes('Cold') ? 'Backup & Restore' : drStrategy.includes('Hot') ? 'Warm Standby' : 'Pilot Light',
+        targetRpoMinutes: drRpoMinutes,
+        targetRtoMinutes: drRtoMinutes,
+        replicationMode: drRpoMinutes <= 1 ? 'Synchronous' : 'Asynchronous',
+        replicationEngine: drEngine,
+        failoverMode: 'Orchestrated Runbook',
+        failbackApproach: 'Reverse Delta Sync'
+      },
+      activeServiceIds: [
+        'azure-avd',
+        'azure-firewall',
+        'azure-anf',
+        'azure-vwan',
+        'nutanix-prism',
+        'nutanix-move',
+        'aws-tgw',
+        'aws-fsx-ontap'
+      ],
+      importedLegacyContext: importedLegacyContext || {}
+    };
+    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${customerName.replace(/\s+/g, '_')}_MultiCloud_Blueprint.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Export BOM to Excel - Explicit Export Action (Syncs legacy state)
   const handleExportBOMExcel = () => {
+    handlePersistLegacyState();
     const wb = XLSX.utils.book_new();
     const rows = [
       { Category: 'General', Metric: 'Customer Name', Specification: customerName },
@@ -568,6 +1081,26 @@ export const DesignGeneratorPage: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
+            {/* Explicit Save Blueprint (Strict Legacy Writeback Boundary) */}
+            <button
+              onClick={handlePersistLegacyState}
+              className="px-3.5 py-2.5 rounded-xl bg-cyan-950 hover:bg-cyan-900 border border-cyan-500/50 text-cyan-300 font-semibold text-xs flex items-center gap-2 cursor-pointer shadow transition-all hover:scale-[1.02]"
+              title="Save current blueprint state and synchronize legacy localStorage non-destructively"
+            >
+              <Save className="w-4 h-4 text-cyan-400" />
+              <span>Save Blueprint</span>
+            </button>
+
+            {/* Export Complete Blueprint JSON */}
+            <button
+              onClick={handleExportBlueprintJSON}
+              className="px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-semibold text-xs flex items-center gap-2 cursor-pointer shadow"
+              title="Export complete multi-cloud architecture topology model as JSON"
+            >
+              <FileDown className="w-4 h-4 text-cyan-400" />
+              <span>Export Blueprint (JSON)</span>
+            </button>
+
             {/* Primary AI Generation Trigger Button */}
             <button
               onClick={() => setShowPreFlightModal(true)}
@@ -580,6 +1113,7 @@ export const DesignGeneratorPage: React.FC = () => {
             <button
               onClick={() => handleExport4K('png')}
               className="px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-semibold text-xs flex items-center gap-2 cursor-pointer shadow"
+              title="Download high-resolution 4K canvas without storage write"
             >
               <Download className="w-4 h-4 text-cyan-400" />
               <span>Export 4K Canvas</span>
@@ -596,6 +1130,7 @@ export const DesignGeneratorPage: React.FC = () => {
             <button
               onClick={handleExportBOMExcel}
               className="px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-semibold text-xs flex items-center gap-2 cursor-pointer shadow"
+              title="Generate Bill of Materials Excel spreadsheet and sync storage"
             >
               <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
               <span>Export BOM (.xlsx)</span>
@@ -603,6 +1138,22 @@ export const DesignGeneratorPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Save Success Notice Banner */}
+      {saveSuccessNotice && (
+        <div className="p-3.5 rounded-xl bg-emerald-950/60 border border-emerald-500/50 flex items-center justify-between gap-3 text-xs text-emerald-200 animate-in fade-in">
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>{saveSuccessNotice}</span>
+          </div>
+          <button
+            onClick={() => setSaveSuccessNotice(null)}
+            className="text-emerald-400 hover:text-white text-xs underline cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Hydration Banner if state was loaded */}
       {importedNotice && (
@@ -643,11 +1194,727 @@ export const DesignGeneratorPage: React.FC = () => {
         </div>
       )}
 
+      {/* Conflicts Resolution Notification */}
+      {conflictsResolvedList.length > 0 && (
+        <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-500/40 space-y-1.5 text-xs text-amber-200">
+          <div className="font-semibold flex items-center gap-2 text-amber-300">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>Multi-Tool State Conflict Resolution Applied:</span>
+          </div>
+          <ul className="list-disc list-inside space-y-0.5 text-[11px] text-amber-200/90 pl-1">
+            {conflictsResolvedList.map((c, idx) => (
+              <li key={idx}>{c}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Architecture Design Track Selector (9 Enterprise Tracks with Category Filters) */}
+      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-5 shadow-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+          <div>
+            <h2 className="text-base font-bold text-white flex items-center gap-2">
+              <Layers className="w-4 h-4 text-cyan-400" />
+              <span>Step 1: Enterprise Architecture Design Track (9 Cloud Tracks)</span>
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Select foundational multi-cloud, hyperscaler SDDC, or hyperconverged migration pattern.
+            </p>
+          </div>
+          <span className="text-xs font-mono text-cyan-400 font-bold px-3 py-1 rounded-full bg-cyan-950/80 border border-cyan-500/30">
+            Active Track: {activeTemplate.toUpperCase()}
+          </span>
+        </div>
+
+        {/* Category Filter Tabs */}
+        <div className="flex flex-wrap items-center gap-2 pb-1">
+          {[
+            { id: 'all', label: 'All Tracks (9)' },
+            { id: 'nutanix', label: 'Nutanix & Hybrid (3)' },
+            { id: 'sddc', label: 'Hyperscaler SDDC (3)' },
+            { id: 'native', label: 'Cloud Native (2)' },
+            { id: 'migration', label: 'Migration (1)' }
+          ].map(tab => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveCategoryTab(tab.id as any)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                activeCategoryTab === tab.id
+                  ? 'bg-cyan-500 text-slate-950 font-bold shadow-md shadow-cyan-500/20'
+                  : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* 9 Tracks Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+          {/* Track 1: Nutanix On-Prem */}
+          {(activeCategoryTab === 'all' || activeCategoryTab === 'nutanix') && (
+            <button
+              type="button"
+              onClick={() => handleSelectTemplate('nutanix-onprem')}
+              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
+                activeTemplate === 'nutanix-onprem'
+                  ? 'bg-emerald-950/40 border-emerald-500 shadow-lg shadow-emerald-950/50 ring-1 ring-emerald-500'
+                  : 'bg-slate-950/70 border-slate-800 hover:border-emerald-600/50 hover:bg-slate-950'
+              }`}
+            >
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <NutanixPrismIcon className="w-6 h-6 text-emerald-400" />
+                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
+                    AOS / AHV
+                  </span>
+                </div>
+                <h3 className="text-xs font-bold text-white">Nutanix On-Premises</h3>
+                <p className="text-[11px] text-slate-400 line-clamp-2">
+                  NCI clusters, AHV virtualization, Prism Central management, and Flow microsegmentation.
+                </p>
+              </div>
+              <div className="text-[10px] font-mono text-emerald-400 flex items-center justify-between pt-1 border-t border-slate-900">
+                <span>Primary Datacenter</span>
+                <ChevronRight className="w-3 h-3" />
+              </div>
+            </button>
+          )}
+
+          {/* Track 2: Nutanix On-Prem to NC2 on Azure */}
+          {(activeCategoryTab === 'all' || activeCategoryTab === 'nutanix') && (
+            <button
+              type="button"
+              onClick={() => handleSelectTemplate('nutanix-to-nc2')}
+              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
+                activeTemplate === 'nutanix-to-nc2'
+                  ? 'bg-cyan-950/40 border-cyan-500 shadow-lg shadow-cyan-950/50 ring-1 ring-cyan-500'
+                  : 'bg-slate-950/70 border-slate-800 hover:border-cyan-600/50 hover:bg-slate-950'
+              }`}
+            >
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <NutanixAhvIcon className="w-5 h-5 text-emerald-400" />
+                    <span className="text-slate-500 text-xs">→</span>
+                    <AzureVirtualWanIcon className="w-5 h-5 text-cyan-400" />
+                  </div>
+                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
+                    NC2 Azure
+                  </span>
+                </div>
+                <h3 className="text-xs font-bold text-white">Nutanix to NC2 on Azure</h3>
+                <p className="text-[11px] text-slate-400 line-clamp-2">
+                  BareMetal Azure nodes with native Azure vNet integration, Nutanix Move replication, and DR.
+                </p>
+              </div>
+              <div className="text-[10px] font-mono text-cyan-400 flex items-center justify-between pt-1 border-t border-slate-900">
+                <span>Hybrid Cloud Extension</span>
+                <ChevronRight className="w-3 h-3" />
+              </div>
+            </button>
+          )}
+
+          {/* Track 3: VMware to Nutanix NC2 Assessment */}
+          {(activeCategoryTab === 'all' || activeCategoryTab === 'migration') && (
+            <button
+              type="button"
+              onClick={() => handleSelectTemplate('vmware-to-nc2')}
+              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
+                activeTemplate === 'vmware-to-nc2'
+                  ? 'bg-indigo-950/40 border-indigo-500 shadow-lg shadow-indigo-950/50 ring-1 ring-indigo-500'
+                  : 'bg-slate-950/70 border-slate-800 hover:border-indigo-600/50 hover:bg-slate-950'
+              }`}
+            >
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <VmwareVcenterIcon className="w-5 h-5 text-sky-400" />
+                    <span className="text-slate-500 text-xs">→</span>
+                    <NutanixMoveIcon className="w-5 h-5 text-emerald-400" />
+                  </div>
+                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-indigo-950 text-indigo-300 border border-indigo-800">
+                    Migration
+                  </span>
+                </div>
+                <h3 className="text-xs font-bold text-white">VMware to NC2 Assessment</h3>
+                <p className="text-[11px] text-slate-400 line-clamp-2">
+                  Cross-hypervisor migration assessment, Nutanix Move VirtIO driver injection, and wave cutover.
+                </p>
+              </div>
+              <div className="text-[10px] font-mono text-indigo-400 flex items-center justify-between pt-1 border-t border-slate-900">
+                <span>Move Assessment</span>
+                <ChevronRight className="w-3 h-3" />
+              </div>
+            </button>
+          )}
+
+          {/* Track 4: Azure VMware Solution (AVS) */}
+          {(activeCategoryTab === 'all' || activeCategoryTab === 'sddc') && (
+            <button
+              type="button"
+              onClick={() => handleSelectTemplate('avs')}
+              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
+                activeTemplate === 'avs'
+                  ? 'bg-sky-950/40 border-sky-500 shadow-lg shadow-sky-950/50 ring-1 ring-sky-500'
+                  : 'bg-slate-950/70 border-slate-800 hover:border-sky-600/50 hover:bg-slate-950'
+              }`}
+            >
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <AzureExpressRouteIcon className="w-6 h-6 text-sky-400" />
+                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-800">
+                    AVS SDDC
+                  </span>
+                </div>
+                <h3 className="text-xs font-bold text-white">Azure VMware Solution</h3>
+                <p className="text-[11px] text-slate-400 line-clamp-2">
+                  ExpressRoute FastPath, Tier-0 NSX-T gateways, decoupled ANF storage, and Azure native hub.
+                </p>
+              </div>
+              <div className="text-[10px] font-mono text-sky-400 flex items-center justify-between pt-1 border-t border-slate-900">
+                <span>Dedicated SDDC</span>
+                <ChevronRight className="w-3 h-3" />
+              </div>
+            </button>
+          )}
+
+          {/* Track 5: VMware Cloud on AWS (VMC) */}
+          {(activeCategoryTab === 'all' || activeCategoryTab === 'sddc') && (
+            <button
+              type="button"
+              onClick={() => handleSelectTemplate('vmc-aws')}
+              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
+                activeTemplate === 'vmc-aws'
+                  ? 'bg-amber-950/40 border-amber-500 shadow-lg shadow-amber-950/50 ring-1 ring-amber-500'
+                  : 'bg-slate-950/70 border-slate-800 hover:border-amber-600/50 hover:bg-slate-950'
+              }`}
+            >
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <AwsTransitGatewayIcon className="w-6 h-6 text-amber-400" />
+                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800">
+                    AWS VMC
+                  </span>
+                </div>
+                <h3 className="text-xs font-bold text-white">VMware Cloud on AWS</h3>
+                <p className="text-[11px] text-slate-400 line-clamp-2">
+                  BareMetal i4i.metal SDDC, high-speed Connected VPC ENI, Transit Gateway, and FSx ONTAP storage.
+                </p>
+              </div>
+              <div className="text-[10px] font-mono text-amber-400 flex items-center justify-between pt-1 border-t border-slate-900">
+                <span>AWS Dedicated SDDC</span>
+                <ChevronRight className="w-3 h-3" />
+              </div>
+            </button>
+          )}
+
+          {/* Track 6: Google Cloud VMware Engine (GCVE) */}
+          {(activeCategoryTab === 'all' || activeCategoryTab === 'sddc') && (
+            <button
+              type="button"
+              onClick={() => handleSelectTemplate('gcve')}
+              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
+                activeTemplate === 'gcve'
+                  ? 'bg-blue-950/40 border-blue-500 shadow-lg shadow-blue-950/50 ring-1 ring-blue-500'
+                  : 'bg-slate-950/70 border-slate-800 hover:border-blue-600/50 hover:bg-slate-950'
+              }`}
+            >
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <GcpInterconnectIcon className="w-6 h-6 text-blue-400" />
+                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800">
+                    GCP GCVE
+                  </span>
+                </div>
+                <h3 className="text-xs font-bold text-white">Google Cloud VMware Engine</h3>
+                <p className="text-[11px] text-slate-400 line-clamp-2">
+                  ve1-standard-72 nodes with 100 Gbps dedicated interconnect, NetApp Volumes (GCNV), and Cloud Armor.
+                </p>
+              </div>
+              <div className="text-[10px] font-mono text-blue-400 flex items-center justify-between pt-1 border-t border-slate-900">
+                <span>GCP Dedicated SDDC</span>
+                <ChevronRight className="w-3 h-3" />
+              </div>
+            </button>
+          )}
+
+          {/* Track 7: AWS Native Enterprise VPC Hub */}
+          {(activeCategoryTab === 'all' || activeCategoryTab === 'native') && (
+            <button
+              type="button"
+              onClick={() => handleSelectTemplate('aws-native')}
+              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
+                activeTemplate === 'aws-native'
+                  ? 'bg-amber-950/40 border-amber-500 shadow-lg shadow-amber-950/50 ring-1 ring-amber-500'
+                  : 'bg-slate-950/70 border-slate-800 hover:border-amber-600/50 hover:bg-slate-950'
+              }`}
+            >
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <AwsTransitGatewayIcon className="w-6 h-6 text-amber-400" />
+                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800">
+                    AWS Native
+                  </span>
+                </div>
+                <h3 className="text-xs font-bold text-white">AWS Native Enterprise VPC Hub</h3>
+                <p className="text-[11px] text-slate-400 line-clamp-2">
+                  Direct Connect gateway, Transit Gateway security inspection, Amazon EKS, Aurora, and S3 tiers.
+                </p>
+              </div>
+              <div className="text-[10px] font-mono text-amber-400 flex items-center justify-between pt-1 border-t border-slate-900">
+                <span>Cloud Native VPC</span>
+                <ChevronRight className="w-3 h-3" />
+              </div>
+            </button>
+          )}
+
+          {/* Track 8: Google Cloud Native Hub */}
+          {(activeCategoryTab === 'all' || activeCategoryTab === 'native') && (
+            <button
+              type="button"
+              onClick={() => handleSelectTemplate('gcp-native')}
+              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
+                activeTemplate === 'gcp-native'
+                  ? 'bg-blue-950/40 border-blue-500 shadow-lg shadow-blue-950/50 ring-1 ring-blue-500'
+                  : 'bg-slate-950/70 border-slate-800 hover:border-blue-600/50 hover:bg-slate-950'
+              }`}
+            >
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <GcpInterconnectIcon className="w-6 h-6 text-blue-400" />
+                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800">
+                    GCP Native
+                  </span>
+                </div>
+                <h3 className="text-xs font-bold text-white">Google Cloud Native Hub</h3>
+                <p className="text-[11px] text-slate-400 line-clamp-2">
+                  Dedicated Interconnect, Shared VPC host project, GKE enterprise clusters, and BigQuery lakehouse.
+                </p>
+              </div>
+              <div className="text-[10px] font-mono text-blue-400 flex items-center justify-between pt-1 border-t border-slate-900">
+                <span>Cloud Native Mesh</span>
+                <ChevronRight className="w-3 h-3" />
+              </div>
+            </button>
+          )}
+
+          {/* Track 9: Multi-Cloud Enterprise Mesh */}
+          {(activeCategoryTab === 'all' || activeCategoryTab === 'nutanix') && (
+            <button
+              type="button"
+              onClick={() => handleSelectTemplate('multi-cloud')}
+              className={`p-4 rounded-xl border text-left transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
+                activeTemplate === 'multi-cloud'
+                  ? 'bg-purple-950/40 border-purple-500 shadow-lg shadow-purple-950/50 ring-1 ring-purple-500'
+                  : 'bg-slate-950/70 border-slate-800 hover:border-purple-600/50 hover:bg-slate-950'
+              }`}
+            >
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1">
+                    <AzureVirtualWanIcon className="w-4 h-4 text-sky-400" />
+                    <AwsTransitGatewayIcon className="w-4 h-4 text-amber-400" />
+                    <GcpInterconnectIcon className="w-4 h-4 text-blue-400" />
+                  </div>
+                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-800">
+                    Mesh
+                  </span>
+                </div>
+                <h3 className="text-xs font-bold text-white">Multi-Cloud Enterprise Mesh</h3>
+                <p className="text-[11px] text-slate-400 line-clamp-2">
+                  Arbitrary multi-DC topology spanning On-Prem, Azure, AWS, and GCP with shared identity & DR.
+                </p>
+              </div>
+              <div className="text-[10px] font-mono text-purple-400 flex items-center justify-between pt-1 border-t border-slate-900">
+                <span>Cross-Cloud DR</span>
+                <ChevronRight className="w-3 h-3" />
+              </div>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Dynamic Multi-Environment Builder (Step 2) */}
+      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-4 shadow-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+          <div>
+            <h2 className="text-base font-bold text-white flex items-center gap-2">
+              <Server className="w-4 h-4 text-cyan-400" />
+              <span>Step 2: Dynamic Multi-Environment Builder ({topologyEnvironments.length} Active Environments)</span>
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Configure arbitrary on-premises datacenters, cloud regions, production tiers, and disaster recovery targets.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowAddEnvModal(true)}
+            className="px-3.5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow transition-all cursor-pointer"
+          >
+            <span>+ Add Custom Environment</span>
+          </button>
+        </div>
+
+        {/* Environments Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+          {topologyEnvironments.map((env, idx) => {
+            const isProd = env.role === 'Production';
+            const isDR = env.role === 'Disaster Recovery';
+            const isShared = env.role === 'Shared Services';
+            const isSecondActive = env.role === 'Secondary Active';
+
+            return (
+              <div
+                key={env.id}
+                className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-slate-700 transition space-y-3 relative group"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    {/* Platform Icon Badge */}
+                    <div className="p-1.5 rounded-lg bg-slate-900 border border-slate-800">
+                      {env.platform.includes('Nutanix') ? (
+                        <NutanixAhvIcon className="w-5 h-5 text-emerald-400" />
+                      ) : env.platform.includes('Azure') ? (
+                        <AzureVirtualWanIcon className="w-5 h-5 text-sky-400" />
+                      ) : env.platform.includes('AWS') ? (
+                        <AwsTransitGatewayIcon className="w-5 h-5 text-amber-400" />
+                      ) : env.platform.includes('Google') || env.platform.includes('GCP') ? (
+                        <GcpInterconnectIcon className="w-5 h-5 text-blue-400" />
+                      ) : (
+                        <VmwareVcenterIcon className="w-5 h-5 text-indigo-400" />
+                      )}
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-white line-clamp-1">{env.name}</h4>
+                      <p className="text-[11px] text-slate-400">{env.region}</p>
+                    </div>
+                  </div>
+
+                  {/* Role Badge */}
+                  <span
+                    className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border shrink-0 ${
+                      isProd
+                        ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
+                        : isDR
+                        ? 'bg-amber-950 text-amber-300 border-amber-700'
+                        : isSecondActive
+                        ? 'bg-sky-950 text-sky-300 border-sky-700'
+                        : isShared
+                        ? 'bg-slate-900 text-slate-300 border-slate-700'
+                        : 'bg-purple-950 text-purple-300 border-purple-700'
+                    }`}
+                  >
+                    {env.role}
+                  </span>
+                </div>
+
+                {/* Sizing Details */}
+                <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-900 text-[11px] font-mono text-slate-300">
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">HOSTS / SKU</span>
+                    <span className="font-semibold text-white">
+                      {env.hostCount > 0 ? `${env.hostCount}x ${env.nodeSku.split(' ')[0]}` : 'Serverless'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">COMPUTE</span>
+                    <span className="font-semibold text-cyan-300">
+                      {env.totalVcpu} vCPU
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">STORAGE</span>
+                    <span className="font-semibold text-emerald-300">
+                      {env.storageTB} TiB
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between pt-1 text-[11px] text-slate-400 border-t border-slate-900">
+                  <span className="font-mono text-[10px] text-slate-500">CIDR: {env.cidrBlock}</span>
+                  {topologyEnvironments.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveEnvironment(env.id)}
+                      className="text-rose-400 hover:text-rose-300 text-[11px] underline cursor-pointer"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Platform-Specific Resilience Validation Warning Banner */}
+        {getPlatformResilienceWarnings().length > 0 && (
+          <div className="space-y-2 pt-2">
+            {getPlatformResilienceWarnings().map((w, idx) => (
+              <div
+                key={idx}
+                className={`p-3 rounded-xl border flex items-start gap-2.5 text-xs ${
+                  w.type === 'warning'
+                    ? 'bg-amber-950/30 border-amber-500/40 text-amber-200'
+                    : 'bg-cyan-950/30 border-cyan-500/40 text-cyan-200'
+                }`}
+              >
+                {w.type === 'warning' ? (
+                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                ) : (
+                  <ShieldCheck className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+                )}
+                <div className="leading-relaxed">
+                  <strong>Technical Architecture Requirement: </strong>
+                  <span>{w.text}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Add Custom Environment Modal */}
+      {showAddEnvModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="relative w-full max-w-lg rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl p-6 text-slate-100 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Server className="w-4 h-4 text-cyan-400" />
+                <h3 className="text-sm font-bold text-white">Add New Infrastructure Environment</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddEnvModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              {/* Environment Name with validation and requirement helper text */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-slate-300 font-medium">
+                    Environment Name <span className="text-rose-400">*</span>
+                  </label>
+                  {isEnvNameEmpty ? (
+                    <span className="text-[11px] text-amber-400/90 font-mono">Required to enable button</span>
+                  ) : isEnvNameDuplicate ? (
+                    <span className="text-[11px] text-rose-400 font-mono font-semibold">Name already in use</span>
+                  ) : (
+                    <span className="text-[11px] text-emerald-400 font-mono flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" /> Valid
+                    </span>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  placeholder="e.g. Frankfurt DR Secondary Datacenter"
+                  value={newEnvName}
+                  onChange={e => setNewEnvName(e.target.value)}
+                  className={`w-full px-3 py-2 bg-slate-950 border rounded-lg text-slate-200 text-xs focus:outline-none transition ${
+                    isEnvNameDuplicate
+                      ? 'border-rose-500 focus:border-rose-400'
+                      : isEnvNameEmpty
+                      ? 'border-slate-800 focus:border-cyan-500'
+                      : 'border-emerald-500/60 focus:border-emerald-400'
+                  }`}
+                />
+                {isEnvNameDuplicate && (
+                  <p className="text-[11px] text-rose-400 flex items-center gap-1 mt-0.5">
+                    <AlertTriangle className="w-3 h-3 shrink-0" />
+                    <span>An environment named &ldquo;{trimmedEnvName}&rdquo; already exists. Please choose a unique name.</span>
+                  </p>
+                )}
+                {isEnvNameEmpty && (
+                  <p className="text-[11px] text-slate-400">
+                    Enter a descriptive identifier (e.g., region, role, or facility name).
+                  </p>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-slate-300 font-medium">Platform Technology</label>
+                  <select
+                    value={newEnvPlatform}
+                    onChange={e => setNewEnvPlatform(e.target.value as any)}
+                    className="w-full px-2 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-200 text-xs"
+                  >
+                    <option value="Nutanix AHV">Nutanix AHV (On-Premises)</option>
+                    <option value="Nutanix NC2 on Azure">Nutanix NC2 on Azure</option>
+                    <option value="Azure VMware Solution">Azure VMware Solution (AVS)</option>
+                    <option value="VMware vSphere">VMware vSphere (On-Premises)</option>
+                    <option value="VMware Cloud on AWS">VMware Cloud on AWS</option>
+                    <option value="Google Cloud VMware Engine">Google Cloud VMware Engine</option>
+                    <option value="AWS Native">AWS Native VPC Hub</option>
+                    <option value="GCP Native">Google Cloud Native Hub</option>
+                    <option value="Co-Location Datacenter">Co-Location Datacenter</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-slate-300 font-medium">Operational Role</label>
+                  <select
+                    value={newEnvRole}
+                    onChange={e => setNewEnvRole(e.target.value as any)}
+                    className="w-full px-2 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-200 text-xs"
+                  >
+                    <option value="Production">Primary Production</option>
+                    <option value="Disaster Recovery">Disaster Recovery (DR)</option>
+                    <option value="Secondary Active">Secondary Active-Active</option>
+                    <option value="Dev/Test">Development & Test</option>
+                    <option value="Shared Services">Shared Services Hub</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-slate-300 font-medium">Region / Facility</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Azure West Europe"
+                    value={newEnvRegion}
+                    onChange={e => setNewEnvRegion(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-200 text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-slate-300 font-medium">Management CIDR</label>
+                    {isCidrFormatInvalid ? (
+                      <span className="text-[11px] text-rose-400 font-mono font-semibold">Invalid CIDR</span>
+                    ) : trimmedCidr ? (
+                      <span className="text-[11px] text-emerald-400 font-mono">IPv4 Valid</span>
+                    ) : (
+                      <span className="text-[11px] text-slate-400 font-mono">Optional</span>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="10.240.0.0/22"
+                    value={newEnvCidr}
+                    onChange={e => setNewEnvCidr(e.target.value)}
+                    className={`w-full px-3 py-2 bg-slate-950 border rounded-lg text-slate-200 text-xs font-mono focus:outline-none transition ${
+                      isCidrFormatInvalid
+                        ? 'border-rose-500 focus:border-rose-400'
+                        : trimmedCidr
+                        ? 'border-emerald-500/60 focus:border-emerald-400'
+                        : 'border-slate-800 focus:border-cyan-500'
+                    }`}
+                  />
+                  {isCidrFormatInvalid ? (
+                    <p className="text-[11px] text-rose-400">
+                      Enter a valid IPv4 CIDR block (e.g. 10.240.0.0/22 or 172.16.0.0/16, prefix /0 to /32).
+                    </p>
+                  ) : (
+                    <p className="text-[10px] text-slate-400">
+                      Format: x.x.x.x/yy (leave blank if unassigned).
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-slate-300 font-medium">Host / Node Count</label>
+                    {!isHostCountValid && (
+                      <span className="text-[11px] text-rose-400 font-mono font-semibold">Invalid count</span>
+                    )}
+                  </div>
+                  <input
+                    type="number"
+                    min={newEnvPlatform.includes('Native') ? 0 : 1}
+                    max={64}
+                    value={newEnvHosts}
+                    onChange={e => setNewEnvHosts(Number(e.target.value))}
+                    className={`w-full px-3 py-2 bg-slate-950 border rounded-lg text-slate-200 text-xs font-mono focus:outline-none transition ${
+                      !isHostCountValid ? 'border-rose-500' : 'border-slate-800 focus:border-cyan-500'
+                    }`}
+                  />
+                  <span className="text-[10px] text-slate-400 block">
+                    {newEnvPlatform.includes('Native')
+                      ? 'Native VPC / VNet services (0 allowed for serverless/managed)'
+                      : 'Physical or baremetal hypervisor nodes (min 1)'}
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-slate-300 font-medium">Storage Footprint (TB)</label>
+                    {!isStorageValid && (
+                      <span className="text-[11px] text-rose-400 font-mono font-semibold">Invalid TB</span>
+                    )}
+                  </div>
+                  <input
+                    type="number"
+                    min={1}
+                    max={1000}
+                    value={newEnvStorageTB}
+                    onChange={e => setNewEnvStorageTB(Number(e.target.value))}
+                    className={`w-full px-3 py-2 bg-slate-950 border rounded-lg text-slate-200 text-xs font-mono focus:outline-none transition ${
+                      !isStorageValid ? 'border-rose-500' : 'border-slate-800 focus:border-cyan-500'
+                    }`}
+                  />
+                  <span className="text-[10px] text-slate-400 block">
+                    Raw or usable storage allocation (TB)
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Validation helper status bar */}
+            {!isAddEnvFormValid && (
+              <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-[11px] text-slate-400 space-y-1">
+                <span className="font-semibold text-slate-300 block">Required to add environment:</span>
+                <ul className="list-disc list-inside space-y-0.5 text-[10px]">
+                  {isEnvNameEmpty && <li>Provide an Environment Name</li>}
+                  {isEnvNameDuplicate && <li>Choose an Environment Name that is not already in use</li>}
+                  {isCidrFormatInvalid && <li>Provide a valid IPv4 CIDR (or leave blank)</li>}
+                  {!isHostCountValid && <li>Enter a valid non-negative host count</li>}
+                  {!isStorageValid && <li>Enter a valid positive storage footprint in TB</li>}
+                </ul>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+              <span className="text-[11px] text-slate-400">
+                Newly created environments are added as unlinked zones until connected.
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAddEnvModal(false)}
+                  className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium cursor-pointer transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAddEnvironment}
+                  disabled={!isAddEnvFormValid}
+                  title={!isAddEnvFormValid ? 'Complete all required fields to add environment' : undefined}
+                  className="px-4 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 text-xs font-bold shadow cursor-pointer transition flex items-center gap-1.5"
+                >
+                  <Server className="w-3.5 h-3.5" />
+                  <span>Add Environment</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 1. Interactive Infrastructure Capture Wizard (4 Columns / Form Sections) */}
       <div className="p-6 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-6">
         <h2 className="text-base font-bold text-white flex items-center gap-2 border-b border-slate-800 pb-3">
           <Server className="w-4 h-4 text-cyan-400" />
-          <span>Infrastructure Parameters & Topology Configuration Wizard</span>
+          <span>Step 3: Workload & Sizing Parameters</span>
         </h2>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 text-xs">
@@ -867,14 +2134,49 @@ export const DesignGeneratorPage: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. Vector Graphics Topology Viewport (Dual Mode: Interactive SVG + 4K Export Toolbar) */}
+      {/* Step 4: Dual-Mode Topology Viewport (Interactive Multi-Tier Canvas + Static 4K Viewport) */}
       <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4 shadow-2xl">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-3">
           <div className="space-y-0.5">
-            <span className="text-xs font-mono text-cyan-400 font-bold uppercase">Dual-Mode Vector Canvas</span>
-            <h3 className="text-lg font-bold text-white">4K Multi-Tier Topology Viewport</h3>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono text-cyan-400 font-bold uppercase">Step 4: Topology Canvas</span>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/30">
+                {topologyEnvironments.length} Nodes · {interconnectLinks.length} Interconnect Links
+              </span>
+            </div>
+            <h3 className="text-lg font-bold text-white">Interactive Multi-Cloud Architecture Canvas</h3>
           </div>
-          <div className="flex items-center gap-2">
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Viewport Mode Switcher */}
+            <div className="flex items-center p-1 bg-slate-950 border border-slate-800 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setCanvasMode('interactive')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                  canvasMode === 'interactive'
+                    ? 'bg-cyan-500 text-slate-950 font-bold shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Network className="w-3.5 h-3.5" />
+                <span>Interactive Canvas</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setCanvasMode('static-vector')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                  canvasMode === 'static-vector'
+                    ? 'bg-cyan-500 text-slate-950 font-bold shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Static 4K Vector Blueprint</span>
+              </button>
+            </div>
+
+            {/* Zoom Controls */}
             <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
               <button
                 onClick={() => setZoomScale(prev => Math.max(0.6, prev - 0.1))}
@@ -899,6 +2201,8 @@ export const DesignGeneratorPage: React.FC = () => {
                 100%
               </button>
             </div>
+
+            {/* Export 4K PNG (Zero storage writes) */}
             <button
               onClick={() => handleExport4K('png')}
               className="px-3 py-2 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
@@ -909,7 +2213,7 @@ export const DesignGeneratorPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Interactive SVG Viewport */}
+        {/* Viewport Area */}
         <div className="overflow-x-auto overflow-y-hidden border border-slate-800 rounded-xl bg-slate-950 p-4">
           <div
             style={{
@@ -920,120 +2224,656 @@ export const DesignGeneratorPage: React.FC = () => {
               height: '720px'
             }}
             className="relative bg-slate-950 border border-slate-800 rounded-lg overflow-hidden shadow-2xl select-none"
+            onMouseMove={handleCanvasMouseMove}
+            onMouseUp={handleCanvasMouseUp}
           >
-            {/* SVG Vector Drawing */}
-            <svg viewBox="0 0 1280 720" className="w-full h-full">
-              {/* Grid Background */}
-              <defs>
-                <pattern id="diagGrid" width="40" height="40" patternUnits="userSpaceOnUse">
-                  <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" strokeWidth="0.5" />
-                </pattern>
-              </defs>
-              <rect width="1280" height="720" fill="url(#diagGrid)" />
+            {canvasMode === 'interactive' ? (
+              /* ========================================================================= */
+              /* MODE 1: Interactive Multi-Tier Architecture Canvas                        */
+              /* ========================================================================= */
+              <div className="relative w-full h-full bg-slate-950 overflow-hidden">
+                {/* Canvas Background Grid */}
+                <svg className="absolute inset-0 w-full h-full pointer-events-none">
+                  <defs>
+                    <pattern id="interactiveGrid" width="40" height="40" patternUnits="userSpaceOnUse">
+                      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" strokeWidth="0.5" />
+                    </pattern>
+                  </defs>
+                  <rect width="1280" height="720" fill="url(#interactiveGrid)" />
+                </svg>
 
-              {/* Header Box */}
-              <rect x="30" y="25" width="1220" height="65" rx="8" fill="#0f172a" stroke="#06b6d4" strokeWidth="1.5" />
-              <text x="50" y="52" fill="#ffffff" fontSize="16" fontWeight="bold" fontFamily="Plus Jakarta Sans">
-                {customerName} — {cloudPlatform} Architecture Blueprint
-              </text>
-              <text x="50" y="74" fill="#94a3b8" fontSize="11" fontFamily="JetBrains Mono">
-                ARCHITECT: {architectName} · DATE: {projectDate} · NODE SKU: {nodeSku} ({calculatedCloudNodes} NODES) · MGMT CIDR: {effectiveMgmtCidr}
-              </text>
+                {/* Multi-Tier Column Background Dividers */}
+                <div className="absolute inset-0 grid grid-cols-3 pointer-events-none border-b border-slate-900">
+                  <div className="border-r border-slate-800/60 p-4 bg-slate-900/10">
+                    <span className="text-[11px] font-mono font-bold text-cyan-400/70 tracking-wider uppercase">
+                      TIER 1: SOURCE & ON-PREMISES DC
+                    </span>
+                  </div>
+                  <div className="border-r border-slate-800/60 p-4 bg-slate-900/20">
+                    <span className="text-[11px] font-mono font-bold text-indigo-400/70 tracking-wider uppercase">
+                      TIER 2: TRANSIT & SECURITY HUBS
+                    </span>
+                  </div>
+                  <div className="p-4 bg-slate-900/10">
+                    <span className="text-[11px] font-mono font-bold text-emerald-400/70 tracking-wider uppercase">
+                      TIER 3: TARGET CLOUD SDDC / NATIVE / DR
+                    </span>
+                  </div>
+                </div>
 
-              {/* Panel 1: On-Premises Datacenter (Left) */}
-              <rect x="30" y="110" width="370" height="570" rx="10" fill="#0b1120" stroke="#334155" strokeWidth="1" />
-              <text x="50" y="140" fill="#06b6d4" fontSize="13" fontWeight="bold" fontFamily="Plus Jakarta Sans">
-                01. ON-PREMISES DATACENTER
-              </text>
+                {/* Floating Connecting Mode Banner */}
+                {connectingSourceId && (
+                  <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-xl bg-amber-950/90 border border-amber-500 shadow-xl flex items-center gap-3 text-xs text-amber-200">
+                    <Activity className="w-4 h-4 text-amber-400 animate-pulse" />
+                    <span>
+                      Connecting from: <strong>{topologyEnvironments.find(e => e.id === connectingSourceId)?.name}</strong>. Click target node to establish link.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setConnectingSourceId(null)}
+                      className="px-2 py-0.5 rounded bg-amber-900 hover:bg-amber-800 text-white text-[10px] font-mono cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
 
-              {/* On-Prem Box 1: vSphere Compute */}
-              <rect x="50" y="160" width="330" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-              <text x="65" y="185" fill="#ffffff" fontSize="12" fontWeight="bold">VMware vCenter Server (VCSA)</text>
-              <text x="65" y="210" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {vCenterCount} vCenter Instance(s)</text>
-              <text x="65" y="230" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {clusterCount} Clusters · {esxiHostCount} ESXi Hosts</text>
-              <text x="65" y="250" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {totalVMCount} Virtual Machines</text>
-              <text x="65" y="270" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {vdsCount} Virtual Distributed Switches</text>
+                {/* Interactive SVG Interconnect Curves */}
+                <svg className="absolute inset-0 w-full h-full pointer-events-none z-10">
+                  {interconnectLinks.map(link => {
+                    const sourceNode = topologyEnvironments.find(e => e.id === link.sourceId);
+                    const targetNode = topologyEnvironments.find(e => e.id === link.targetId);
+                    if (!sourceNode || !targetNode) return null;
 
-              {/* On-Prem Box 2: SAN Storage */}
-              <rect x="50" y="325" width="330" height="130" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-              <text x="65" y="350" fill="#ffffff" fontSize="12" fontWeight="bold">SAN / NAS Storage Tier</text>
-              <text x="65" y="375" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Fibre Channel / iSCSI Clustered Arrays</text>
-              <text x="65" y="395" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Stretched VLANs: {subsegments.map(s => s.vlanId).join(', ')}</text>
-              <text x="65" y="415" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Environments: {environments.join(', ')}</text>
+                    const sx = (sourceNode.x ?? 80) + 290;
+                    const sy = (sourceNode.y ?? 120) + 70;
+                    const tx = (targetNode.x ?? 780);
+                    const ty = (targetNode.y ?? 120) + 70;
 
-              {/* On-Prem Box 3: HCX Connector */}
-              <rect x="50" y="470" width="330" height="180" rx="6" fill="#064e3b" stroke="#10b981" strokeWidth="1" />
-              <text x="65" y="495" fill="#34d399" fontSize="12" fontWeight="bold">VMware HCX Connector Fleet</text>
-              <text x="65" y="520" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• HCX Interconnect (IX) Service Engine</text>
-              <text x="65" y="540" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• HCX Network Extension (NE) L2 Stretch</text>
-              <text x="65" y="560" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• HCX WAN Optimization (WO)</text>
-              <text x="65" y="580" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• Mobility Optimized Networking (MON)</text>
+                    const dx = Math.abs(tx - sx) * 0.45;
+                    const pathData = `M ${sx} ${sy} C ${sx + dx} ${sy}, ${tx - dx} ${ty}, ${tx} ${ty}`;
+                    const strokeColor = link.protocol.includes('ExpressRoute')
+                      ? '#38bdf8'
+                      : link.protocol.includes('Direct Connect')
+                      ? '#f59e0b'
+                      : link.protocol.includes('Interconnect')
+                      ? '#60a5fa'
+                      : link.protocol.includes('Move') || link.protocol.includes('HCX')
+                      ? '#10b981'
+                      : '#c084fc';
 
-              {/* Panel 2: Hybrid Transit & Edge Security (Center) */}
-              <rect x="430" y="110" width="370" height="570" rx="10" fill="#0b1120" stroke="#334155" strokeWidth="1" />
-              <text x="450" y="140" fill="#38bdf8" fontSize="13" fontWeight="bold" fontFamily="Plus Jakarta Sans">
-                02. HYBRID TRANSIT & EDGE
-              </text>
+                    const midX = (sx + tx) / 2;
+                    const midY = (sy + ty) / 2;
 
-              {/* Center Box 1: Interconnect */}
-              <rect x="450" y="160" width="330" height="130" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-              <text x="465" y="185" fill="#ffffff" fontSize="12" fontWeight="bold">Cloud Interconnect & Peering</text>
-              <text x="465" y="210" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {connectivity}</text>
-              <text x="465" y="230" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Dual Redundant 10G Circuits</text>
-              <text x="465" y="250" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• BGP Dynamic Route Peering</text>
+                    return (
+                      <g key={link.id}>
+                        {/* Glow halo */}
+                        <path d={pathData} fill="none" stroke={strokeColor} strokeWidth="6" opacity="0.2" />
+                        {/* Main connection line */}
+                        <path d={pathData} fill="none" stroke={strokeColor} strokeWidth="2.5" />
+                        {/* Directional animated dashes */}
+                        <path
+                          d={pathData}
+                          fill="none"
+                          stroke="#ffffff"
+                          strokeWidth="1.5"
+                          strokeDasharray="6,8"
+                          opacity="0.8"
+                        />
+                        {/* Link Protocol & Bandwidth Badge */}
+                        <foreignObject
+                          x={midX - 70}
+                          y={midY - 14}
+                          width="140"
+                          height="28"
+                          className="pointer-events-auto"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditLink(link)}
+                            className="w-full h-full px-2 py-0.5 rounded-full bg-slate-900/90 border border-slate-700 hover:border-cyan-400 text-[10px] font-mono text-slate-200 hover:text-white flex items-center justify-center gap-1 shadow-lg cursor-pointer transition"
+                            title={`Click to edit or remove ${link.protocol} link (${link.bandwidthGbps} Gbps)`}
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
+                            <span className="font-bold text-cyan-300">{link.bandwidthGbps}G</span>
+                            <span className="truncate">{link.protocol.split(' ')[0]}</span>
+                          </button>
+                        </foreignObject>
+                      </g>
+                    );
+                  })}
+                </svg>
 
-              {/* Center Box 2: Landing Zone */}
-              <rect x="450" y="305" width="330" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-              <text x="465" y="330" fill="#ffffff" fontSize="12" fontWeight="bold">Landing Zone Architecture</text>
-              <text x="465" y="355" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {landingZone}</text>
-              <text x="465" y="375" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• FastPath Gateway Acceleration</text>
-              <text x="465" y="395" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Route Server Peering Active</text>
+                {/* Interactive Node Cards */}
+                <div className="absolute inset-0 z-20 pointer-events-auto">
+                  {topologyEnvironments.map(env => {
+                    const isSourceSelected = connectingSourceId === env.id;
+                    const isTargetCandidate = Boolean(connectingSourceId && connectingSourceId !== env.id);
+                    const isSelected = selectedNodeId === env.id;
 
-              {/* Center Box 3: NVA Firewall & WAF */}
-              <rect x="450" y="470" width="330" height="180" rx="6" fill="#581c87" stroke="#a855f7" strokeWidth="1" />
-              <text x="465" y="495" fill="#d8b4fe" fontSize="12" fontWeight="bold">NVA Firewall: {nvaFirewall.split(' ')[0]}</text>
-              <text x="465" y="520" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• {nvaFirewall}</text>
-              <text x="465" y="540" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• WAF: {wafSolution}</text>
-              <text x="465" y="560" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• Zero-Trust Inspection & IDS/IPS</text>
-              <text x="465" y="580" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• Egress Cloud Breakout Routing</text>
+                    const isProd = env.role === 'Production';
+                    const isDR = env.role === 'Disaster Recovery';
+                    const isShared = env.role === 'Shared Services';
 
-              {/* Panel 3: Cloud SDDC Core (Right) */}
-              <rect x="830" y="110" width="420" height="570" rx="10" fill="#0b1120" stroke="#334155" strokeWidth="1" />
-              <text x="850" y="140" fill="#10b981" fontSize="13" fontWeight="bold" fontFamily="Plus Jakarta Sans">
-                03. {cloudPlatform.toUpperCase()} SDDC CORE
-              </text>
+                    return (
+                      <div
+                        key={env.id}
+                        style={{
+                          transform: `translate(${env.x ?? 80}px, ${env.y ?? 120}px)`,
+                          width: '290px'
+                        }}
+                        onMouseDown={e => handleNodeMouseDown(e, env)}
+                        className={`absolute rounded-xl bg-slate-900/95 border shadow-2xl transition-shadow select-none ${
+                          isSourceSelected
+                            ? 'border-amber-400 ring-2 ring-amber-400/50 shadow-amber-950/50'
+                            : isTargetCandidate
+                            ? 'border-cyan-400 ring-2 ring-cyan-400/40 animate-pulse'
+                            : isSelected
+                            ? 'border-cyan-500 ring-1 ring-cyan-500'
+                            : 'border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        {/* Draggable Card Header */}
+                        <div className="p-3 border-b border-slate-800/80 flex items-center justify-between gap-2 cursor-grab active:cursor-grabbing bg-slate-950/40 rounded-t-xl">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <GripVertical className="w-4 h-4 text-slate-500 shrink-0" />
+                            <div className="p-1 rounded bg-slate-900 border border-slate-800 shrink-0">
+                              {env.platform.includes('Nutanix') ? (
+                                <NutanixAhvIcon className="w-4 h-4 text-emerald-400" />
+                              ) : env.platform.includes('Azure') ? (
+                                <AzureVirtualWanIcon className="w-4 h-4 text-sky-400" />
+                              ) : env.platform.includes('AWS') ? (
+                                <AwsTransitGatewayIcon className="w-4 h-4 text-amber-400" />
+                              ) : env.platform.includes('Google') || env.platform.includes('GCP') ? (
+                                <GcpInterconnectIcon className="w-4 h-4 text-blue-400" />
+                              ) : (
+                                <VmwareVcenterIcon className="w-4 h-4 text-indigo-400" />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <h4 className="text-xs font-bold text-white truncate">{env.name}</h4>
+                              <p className="text-[10px] text-slate-400 truncate">{env.region}</p>
+                            </div>
+                          </div>
+                          <span
+                            className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border shrink-0 ${
+                              isProd
+                                ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
+                                : isDR
+                                ? 'bg-amber-950 text-amber-300 border-amber-700'
+                                : isShared
+                                ? 'bg-slate-900 text-slate-300 border-slate-700'
+                                : 'bg-sky-950 text-sky-300 border-sky-700'
+                            }`}
+                          >
+                            {env.role}
+                          </span>
+                        </div>
 
-              {/* SDDC Box 1: Bare-Metal Hosts */}
-              <rect x="850" y="160" width="380" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-              <text x="865" y="185" fill="#ffffff" fontSize="12" fontWeight="bold">
-                {calculatedCloudNodes} Hosts ({nodeSku}) — {avsGen}
-              </text>
-              <text x="865" y="210" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Management CIDR: {effectiveMgmtCidr}</text>
-              <text x="865" y="230" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• VMware ESXi Hypervisor + vSAN</text>
-              <text x="865" y="250" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Sized for {totalVMCount} VMs (N+1 HA Buffer)</text>
+                        {/* Card Body - Infrastructure Metrics */}
+                        <div className="p-3 space-y-2 text-[11px] font-mono">
+                          <div className="grid grid-cols-3 gap-1.5 text-center bg-slate-950/50 p-2 rounded-lg border border-slate-800/60">
+                            <div>
+                              <span className="text-[9px] text-slate-500 block">HOSTS</span>
+                              <span className="font-bold text-white text-xs">{env.hostCount}</span>
+                            </div>
+                            <div>
+                              <span className="text-[9px] text-slate-500 block">VCPU</span>
+                              <span className="font-bold text-cyan-300 text-xs">{env.totalVcpu}</span>
+                            </div>
+                            <div>
+                              <span className="text-[9px] text-slate-500 block">STORAGE</span>
+                              <span className="font-bold text-emerald-300 text-xs">{env.storageTB}T</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
+                            <span>CIDR: {env.cidrBlock}</span>
+                            <span className="text-slate-500 truncate max-w-[120px]">{env.nodeSku.split(' ')[0]}</span>
+                          </div>
+                        </div>
 
-              {/* SDDC Box 2: NSX-T Core */}
-              <rect x="850" y="325" width="380" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-              <text x="865" y="350" fill="#ffffff" fontSize="12" fontWeight="bold">NSX-T SDN & Tier-0/Tier-1 Routing</text>
-              <text x="865" y="375" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Tier-0 Active-Active Gateway (ECMP)</text>
-              <text x="865" y="395" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Segregated Tier-1s: {environments.map(e => `T1-${e}`).join(', ')}</text>
-              <text x="865" y="415" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Distributed Firewall (DFW) Microseg</text>
+                        {/* Card Action Footer */}
+                        <div className="p-2 border-t border-slate-800/80 bg-slate-950/30 rounded-b-xl flex items-center justify-between gap-1 text-[10px]">
+                          {isTargetCandidate ? (
+                            <button
+                              type="button"
+                              onClick={() => handleFinishConnect(env.id)}
+                              className="w-full py-1 rounded bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold flex items-center justify-center gap-1 cursor-pointer transition shadow"
+                            >
+                              <Link2 className="w-3 h-3" />
+                              <span>Connect Here</span>
+                            </button>
+                          ) : isSourceSelected ? (
+                            <span className="w-full text-center py-1 text-amber-300 font-mono font-semibold">
+                              Source Selected
+                            </span>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleStartConnect(env.id)}
+                                className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 flex items-center gap-1 cursor-pointer transition"
+                                title="Start drawing connection link to another node"
+                              >
+                                <Link2 className="w-3 h-3" />
+                                <span>Connect</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedNodeId(env.id)}
+                                className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1 cursor-pointer transition"
+                                title="Inspect and edit node sizing parameters"
+                              >
+                                <Settings2 className="w-3 h-3 text-slate-400" />
+                                <span>Inspect</span>
+                              </button>
+                              {topologyEnvironments.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveEnvironment(env.id)}
+                                  className="px-2 py-1 rounded hover:bg-rose-950 text-slate-500 hover:text-rose-400 cursor-pointer transition"
+                                  title="Remove environment"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
 
-              {/* SDDC Box 3: Decoupled Storage */}
-              <rect x="850" y="490" width="380" height="160" rx="6" fill="#0c4a6e" stroke="#0284c7" strokeWidth="1" />
-              <text x="865" y="515" fill="#38bdf8" fontSize="12" fontWeight="bold">
-                External Decoupled Storage Tier ({decoupledStorageTB} TB)
-              </text>
-              <text x="865" y="540" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">
-                • {externalStorageName}
-              </text>
-              <text x="865" y="560" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• High-IOPS NFS Datastore Mounts</text>
-              <text x="865" y="580" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• Offloads Storage Sprawl from Bare-Metal Hosts</text>
+                {/* Node Spec Inspector Drawer / Modal */}
+                {selectedNodeId && (() => {
+                  const inspectingNode = topologyEnvironments.find(e => e.id === selectedNodeId);
+                  if (!inspectingNode) return null;
+                  const nodeLinks = interconnectLinks.filter(
+                    l => l.sourceId === inspectingNode.id || l.targetId === inspectingNode.id
+                  );
 
-              {/* Interconnect Connecting Arrows */}
-              <path d="M 380 540 L 450 220" stroke="#06b6d4" strokeWidth="2.5" strokeDasharray="6,4" fill="none" />
-              <path d="M 780 380 L 850 380" stroke="#06b6d4" strokeWidth="2.5" strokeDasharray="6,4" fill="none" />
-            </svg>
+                  return (
+                    <div className="absolute top-4 right-4 z-40 w-96 rounded-2xl bg-slate-900 border border-cyan-500/50 shadow-2xl p-5 text-slate-100 space-y-4 animate-in slide-in-from-right duration-150">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                        <div className="flex items-center gap-2">
+                          <Settings2 className="w-4 h-4 text-cyan-400" />
+                          <h4 className="text-xs font-bold text-white truncate">Node Spec Inspector</h4>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedNodeId(null)}
+                          className="p-1 rounded-lg text-slate-400 hover:text-white"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="space-y-3 text-xs">
+                        <div className="space-y-1">
+                          <label className="text-slate-400 text-[10px] uppercase font-mono">Environment Name</label>
+                          <input
+                            type="text"
+                            value={inspectingNode.name}
+                            onChange={e => handleUpdateNodeSpec(inspectingNode.id, { name: e.target.value })}
+                            className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-xs font-semibold"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <label className="text-slate-400 text-[10px] uppercase font-mono">Platform</label>
+                            <input
+                              type="text"
+                              disabled
+                              value={inspectingNode.platform}
+                              className="w-full px-2.5 py-1.5 bg-slate-950/60 border border-slate-800 rounded text-slate-400 text-xs"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-slate-400 text-[10px] uppercase font-mono">Region</label>
+                            <input
+                              type="text"
+                              value={inspectingNode.region}
+                              onChange={e => handleUpdateNodeSpec(inspectingNode.id, { region: e.target.value })}
+                              className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-xs"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2 font-mono">
+                          <div className="space-y-1">
+                            <label className="text-slate-400 text-[10px] uppercase">Hosts</label>
+                            <input
+                              type="number"
+                              min="0"
+                              max="64"
+                              value={inspectingNode.hostCount}
+                              onChange={e =>
+                                handleUpdateNodeSpec(inspectingNode.id, {
+                                  hostCount: Number(e.target.value),
+                                  totalVcpu: Number(e.target.value) * 36,
+                                  totalRamGB: Number(e.target.value) * 576
+                                })
+                              }
+                              className="w-full px-2 py-1 bg-slate-950 border border-slate-800 rounded text-white text-xs"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-slate-400 text-[10px] uppercase">vCPU</label>
+                            <input
+                              type="number"
+                              value={inspectingNode.totalVcpu}
+                              onChange={e => handleUpdateNodeSpec(inspectingNode.id, { totalVcpu: Number(e.target.value) })}
+                              className="w-full px-2 py-1 bg-slate-950 border border-slate-800 rounded text-cyan-300 text-xs"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-slate-400 text-[10px] uppercase">Storage TB</label>
+                            <input
+                              type="number"
+                              min="1"
+                              value={inspectingNode.storageTB}
+                              onChange={e => handleUpdateNodeSpec(inspectingNode.id, { storageTB: Number(e.target.value) })}
+                              className="w-full px-2 py-1 bg-slate-950 border border-slate-800 rounded text-emerald-300 text-xs"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-slate-400 text-[10px] uppercase font-mono">Management CIDR</label>
+                          <input
+                            type="text"
+                            value={inspectingNode.cidrBlock}
+                            onChange={e => handleUpdateNodeSpec(inspectingNode.id, { cidrBlock: e.target.value })}
+                            className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-xs font-mono"
+                          />
+                        </div>
+
+                        {/* Connected Interconnect Links */}
+                        <div className="space-y-1.5 pt-2 border-t border-slate-800">
+                          <span className="text-slate-400 text-[10px] uppercase font-mono block">Connected Links ({nodeLinks.length})</span>
+                          {nodeLinks.length === 0 ? (
+                            <p className="text-[11px] text-slate-500">Unlinked zone. Click 'Connect' on canvas to create an interconnect link.</p>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {nodeLinks.map(link => (
+                                <div key={link.id} className="p-2 rounded bg-slate-950 border border-slate-800 flex items-center justify-between text-[11px]">
+                                  <div className="truncate pr-2">
+                                    <span className="text-cyan-400 font-mono font-bold">{link.bandwidthGbps}G</span> · {link.protocol}
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteLink(link.id)}
+                                    className="text-rose-400 hover:text-rose-300 text-[10px] cursor-pointer"
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-800 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedNodeId(null)}
+                          className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold cursor-pointer"
+                        >
+                          Done
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Configure Interconnect Link Modal */}
+                {showLinkModal && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
+                    <div className="relative w-full max-w-md rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl p-6 text-slate-100 space-y-4">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                        <div className="flex items-center gap-2">
+                          <Link2 className="w-4 h-4 text-cyan-400" />
+                          <h4 className="text-sm font-bold text-white">
+                            {editingLinkId ? 'Edit Interconnect Link' : 'Establish Network Interconnect Link'}
+                          </h4>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setShowLinkModal(false)}
+                          className="p-1 text-slate-400 hover:text-white"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="space-y-3 text-xs">
+                        <div className="grid grid-cols-2 gap-3 p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-[11px]">
+                          <div>
+                            <span className="text-[10px] text-slate-500 uppercase font-mono block">Source</span>
+                            <span className="font-bold text-cyan-300">
+                              {topologyEnvironments.find(e => e.id === linkModalSourceId)?.name}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-slate-500 uppercase font-mono block">Target</span>
+                            <span className="font-bold text-emerald-300">
+                              {topologyEnvironments.find(e => e.id === linkModalTargetId)?.name}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-slate-300 font-medium">Interconnect Protocol</label>
+                          <select
+                            value={linkProtocol}
+                            onChange={e => setLinkProtocol(e.target.value as any)}
+                            className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-200 text-xs"
+                          >
+                            <option value="ExpressRoute FastPath">Azure ExpressRoute FastPath (Ultra High Speed)</option>
+                            <option value="AWS Direct Connect">AWS Direct Connect Gateway (10G Dedicated)</option>
+                            <option value="Google Cloud Interconnect">Google Cloud Dedicated Interconnect</option>
+                            <option value="IPsec VPN">Site-to-Site IPsec VPN Tunnel</option>
+                            <option value="VMware HCX L2 Extension">VMware HCX Network Extension (L2 Stretch)</option>
+                            <option value="Nutanix Move">Nutanix Move Non-Disruptive Migration Pipe</option>
+                            <option value="Nutanix Protection Domain / Leap">Nutanix Protection Domains (NearSync / Leap)</option>
+                            <option value="VNet / VPC Peering">Cloud Native VNet / VPC Peering</option>
+                            <option value="Transit Gateway Route">Transit Gateway Inter-Region Peering</option>
+                          </select>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <label className="text-slate-300 font-medium">Bandwidth (Gbps)</label>
+                            <select
+                              value={linkBandwidth}
+                              onChange={e => setLinkBandwidth(Number(e.target.value))}
+                              className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-200 text-xs font-mono font-bold text-cyan-400"
+                            >
+                              <option value="1">1 Gbps</option>
+                              <option value="10">10 Gbps</option>
+                              <option value="25">25 Gbps</option>
+                              <option value="40">40 Gbps</option>
+                              <option value="100">100 Gbps</option>
+                            </select>
+                          </div>
+                          <div className="flex items-center pt-5">
+                            <label className="flex items-center gap-2 cursor-pointer text-slate-300">
+                              <input
+                                type="checkbox"
+                                checked={linkRedundant}
+                                onChange={e => setLinkRedundant(e.target.checked)}
+                                className="rounded bg-slate-950 border-slate-800 text-cyan-500"
+                              />
+                              <span>Dual Redundant Circuit</span>
+                            </label>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-slate-300 font-medium">Notes & Annotations</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Dedicated 10G pipe with 99.99% SLA"
+                            value={linkNotes}
+                            onChange={e => setLinkNotes(e.target.value)}
+                            className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-200 text-xs"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+                        {editingLinkId ? (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteLink(editingLinkId)}
+                            className="px-3 py-1.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-500/50 text-rose-300 text-xs font-semibold cursor-pointer"
+                          >
+                            Delete Link
+                          </button>
+                        ) : (
+                          <div />
+                        )}
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setShowLinkModal(false)}
+                            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleSaveLink}
+                            className="px-4 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold cursor-pointer"
+                          >
+                            {editingLinkId ? 'Save Changes' : 'Establish Link'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* ========================================================================= */
+              /* MODE 2: Preserved Static 4K Vector Blueprint Viewport                     */
+              /* ========================================================================= */
+              <svg viewBox="0 0 1280 720" className="w-full h-full">
+                {/* Grid Background */}
+                <defs>
+                  <pattern id="diagGrid" width="40" height="40" patternUnits="userSpaceOnUse">
+                    <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" strokeWidth="0.5" />
+                  </pattern>
+                </defs>
+                <rect width="1280" height="720" fill="url(#diagGrid)" />
+
+                {/* Header Box */}
+                <rect x="30" y="25" width="1220" height="65" rx="8" fill="#0f172a" stroke="#06b6d4" strokeWidth="1.5" />
+                <text x="50" y="52" fill="#ffffff" fontSize="16" fontWeight="bold" fontFamily="Plus Jakarta Sans">
+                  {customerName} — {cloudPlatform} Architecture Blueprint
+                </text>
+                <text x="50" y="74" fill="#94a3b8" fontSize="11" fontFamily="JetBrains Mono">
+                  ARCHITECT: {architectName} · DATE: {projectDate} · NODE SKU: {nodeSku} ({calculatedCloudNodes} NODES) · MGMT CIDR: {effectiveMgmtCidr}
+                </text>
+
+                {/* Panel 1: On-Premises Datacenter (Left) */}
+                <rect x="30" y="110" width="370" height="570" rx="10" fill="#0b1120" stroke="#334155" strokeWidth="1" />
+                <text x="50" y="140" fill="#06b6d4" fontSize="13" fontWeight="bold" fontFamily="Plus Jakarta Sans">
+                  01. ON-PREMISES DATACENTER
+                </text>
+
+                {/* On-Prem Box 1: vSphere Compute */}
+                <rect x="50" y="160" width="330" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
+                <text x="65" y="185" fill="#ffffff" fontSize="12" fontWeight="bold">VMware vCenter Server (VCSA)</text>
+                <text x="65" y="210" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {vCenterCount} vCenter Instance(s)</text>
+                <text x="65" y="230" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {clusterCount} Clusters · {esxiHostCount} ESXi Hosts</text>
+                <text x="65" y="250" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {totalVMCount} Virtual Machines</text>
+                <text x="65" y="270" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {vdsCount} Virtual Distributed Switches</text>
+
+                {/* On-Prem Box 2: SAN Storage */}
+                <rect x="50" y="325" width="330" height="130" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
+                <text x="65" y="350" fill="#ffffff" fontSize="12" fontWeight="bold">SAN / NAS Storage Tier</text>
+                <text x="65" y="375" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Fibre Channel / iSCSI Clustered Arrays</text>
+                <text x="65" y="395" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Stretched VLANs: {subsegments.map(s => s.vlanId).join(', ')}</text>
+                <text x="65" y="415" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Environments: {environments.join(', ')}</text>
+
+                {/* On-Prem Box 3: HCX Connector */}
+                <rect x="50" y="470" width="330" height="180" rx="6" fill="#064e3b" stroke="#10b981" strokeWidth="1" />
+                <text x="65" y="495" fill="#34d399" fontSize="12" fontWeight="bold">VMware HCX Connector Fleet</text>
+                <text x="65" y="520" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• HCX Interconnect (IX) Service Engine</text>
+                <text x="65" y="540" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• HCX Network Extension (NE) L2 Stretch</text>
+                <text x="65" y="560" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• HCX WAN Optimization (WO)</text>
+                <text x="65" y="580" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• Mobility Optimized Networking (MON)</text>
+
+                {/* Panel 2: Hybrid Transit & Edge Security (Center) */}
+                <rect x="430" y="110" width="370" height="570" rx="10" fill="#0b1120" stroke="#334155" strokeWidth="1" />
+                <text x="450" y="140" fill="#38bdf8" fontSize="13" fontWeight="bold" fontFamily="Plus Jakarta Sans">
+                  02. HYBRID TRANSIT & EDGE
+                </text>
+
+                {/* Center Box 1: Interconnect */}
+                <rect x="450" y="160" width="330" height="130" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
+                <text x="465" y="185" fill="#ffffff" fontSize="12" fontWeight="bold">Cloud Interconnect & Peering</text>
+                <text x="465" y="210" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {connectivity}</text>
+                <text x="465" y="230" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Dual Redundant 10G Circuits</text>
+                <text x="465" y="250" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• BGP Dynamic Route Peering</text>
+
+                {/* Center Box 2: Landing Zone */}
+                <rect x="450" y="305" width="330" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
+                <text x="465" y="330" fill="#ffffff" fontSize="12" fontWeight="bold">Landing Zone Architecture</text>
+                <text x="465" y="355" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {landingZone}</text>
+                <text x="465" y="375" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• FastPath Gateway Acceleration</text>
+                <text x="465" y="395" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Route Server Peering Active</text>
+
+                {/* Center Box 3: NVA Firewall & WAF */}
+                <rect x="450" y="470" width="330" height="180" rx="6" fill="#581c87" stroke="#a855f7" strokeWidth="1" />
+                <text x="465" y="495" fill="#d8b4fe" fontSize="12" fontWeight="bold">NVA Firewall: {nvaFirewall.split(' ')[0]}</text>
+                <text x="465" y="520" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• {nvaFirewall}</text>
+                <text x="465" y="540" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• WAF: {wafSolution}</text>
+                <text x="465" y="560" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• Zero-Trust Inspection & IDS/IPS</text>
+                <text x="465" y="580" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• Egress Cloud Breakout Routing</text>
+
+                {/* Panel 3: Cloud SDDC Core (Right) */}
+                <rect x="830" y="110" width="420" height="570" rx="10" fill="#0b1120" stroke="#334155" strokeWidth="1" />
+                <text x="850" y="140" fill="#10b981" fontSize="13" fontWeight="bold" fontFamily="Plus Jakarta Sans">
+                  03. {cloudPlatform.toUpperCase()} SDDC CORE
+                </text>
+
+                {/* SDDC Box 1: Bare-Metal Hosts */}
+                <rect x="850" y="160" width="380" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
+                <text x="865" y="185" fill="#ffffff" fontSize="12" fontWeight="bold">
+                  {calculatedCloudNodes} Hosts ({nodeSku}) — {avsGen}
+                </text>
+                <text x="865" y="210" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Management CIDR: {effectiveMgmtCidr}</text>
+                <text x="865" y="230" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• VMware ESXi Hypervisor + vSAN</text>
+                <text x="865" y="250" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Sized for {totalVMCount} VMs (N+1 HA Buffer)</text>
+
+                {/* SDDC Box 2: NSX-T Core */}
+                <rect x="850" y="325" width="380" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
+                <text x="865" y="350" fill="#ffffff" fontSize="12" fontWeight="bold">NSX-T SDN & Tier-0/Tier-1 Routing</text>
+                <text x="865" y="375" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Tier-0 Active-Active Gateway (ECMP)</text>
+                <text x="865" y="395" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Segregated Tier-1s: {environments.map(e => `T1-${e}`).join(', ')}</text>
+                <text x="865" y="415" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Distributed Firewall (DFW) Microseg</text>
+
+                {/* SDDC Box 3: Decoupled Storage */}
+                <rect x="850" y="490" width="380" height="160" rx="6" fill="#0c4a6e" stroke="#0284c7" strokeWidth="1" />
+                <text x="865" y="515" fill="#38bdf8" fontSize="12" fontWeight="bold">
+                  External Decoupled Storage Tier ({decoupledStorageTB} TB)
+                </text>
+                <text x="865" y="540" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">
+                  • {externalStorageName}
+                </text>
+                <text x="865" y="560" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• High-IOPS NFS Datastore Mounts</text>
+                <text x="865" y="580" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• Offloads Storage Sprawl from Bare-Metal Hosts</text>
+
+                {/* Interconnect Connecting Arrows */}
+                <path d="M 380 540 L 450 220" stroke="#06b6d4" strokeWidth="2.5" strokeDasharray="6,4" fill="none" />
+                <path d="M 780 380 L 850 380" stroke="#06b6d4" strokeWidth="2.5" strokeDasharray="6,4" fill="none" />
+              </svg>
+            )}
           </div>
         </div>
       </div>
