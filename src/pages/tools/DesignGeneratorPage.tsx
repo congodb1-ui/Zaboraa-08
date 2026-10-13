@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import {
@@ -87,6 +87,876 @@ interface AIBlueprintResult {
   message?: string;
 }
 
+export interface TrackPanelBox {
+  title: string;
+  bullets: string[];
+}
+
+export interface TrackVisualSpec {
+  title: string;
+  panel1Header: string;
+  panel1Box1: TrackPanelBox;
+  panel1Box2: TrackPanelBox;
+  panel1Box3: TrackPanelBox;
+  panel2Header: string;
+  panel2Box1: TrackPanelBox;
+  panel2Box2: TrackPanelBox;
+  panel2Box3: TrackPanelBox;
+  panel3Header: string;
+  panel3Box1: TrackPanelBox;
+  panel3Box2: TrackPanelBox;
+  panel3Box3: TrackPanelBox;
+}
+
+export function buildTrackVisualSpec(
+  templateId: ArchitectureTemplateId,
+  p: {
+    customerName: string;
+    sourceEnv?: EnvironmentNode;
+    transitEnv?: EnvironmentNode;
+    targetEnv?: EnvironmentNode;
+    totalVMs: number;
+    interconnectLinks: InterconnectLink[];
+    connectivity: string;
+    landingZone: string;
+    nvaFirewall: string;
+    wafSolution: string;
+    drEngine: string;
+    drRpoMinutes: number;
+    drRtoMinutes: number;
+    drStrategy: string;
+    externalStorageName: string;
+    decoupledStorageTB: number;
+  }
+): TrackVisualSpec {
+  const src = p.sourceEnv || {
+    name: 'Primary Datacenter',
+    hostCount: 16,
+    nodeSku: 'Enterprise Node',
+    totalVcpu: 512,
+    totalRamGB: 2048,
+    storageTB: 200,
+    cidrBlock: '10.10.0.0/16',
+    region: 'HQ Datacenter'
+  };
+  const tgt = p.targetEnv || {
+    name: 'Target Cloud / DR',
+    hostCount: 4,
+    nodeSku: 'Cloud BareMetal',
+    totalVcpu: 144,
+    totalRamGB: 576,
+    storageTB: 60,
+    cidrBlock: '10.240.0.0/22',
+    region: 'Target Cloud'
+  };
+  const rpoText = p.drRpoMinutes === 0 ? '0-min Sync (Zero Data Loss)' : `${p.drRpoMinutes}-min RPO`;
+  const storageText = p.decoupledStorageTB > 0 ? `${p.decoupledStorageTB} TB ${p.externalStorageName}` : 'All-Flash Local NVMe';
+
+  switch (templateId) {
+    case 'nutanix-onprem':
+      return {
+        title: `${p.customerName} — Nutanix Private Cloud Enterprise Architecture`,
+        panel1Header: '01. ON-PREMISES NUTANIX PRIVATE CLUSTER',
+        panel1Box1: {
+          title: 'Nutanix Prism Central & AOS Cluster',
+          bullets: [
+            '• Prism Central Clustered Management Plane',
+            '• AOS 6.5 Distributed Storage Fabric (DSF)',
+            `• ${src.hostCount}x ${src.nodeSku.split(' ')[0]} AHV Hypervisor Nodes`,
+            `• ${p.totalVMs} Virtual Machines Across Workload Tiers`
+          ]
+        },
+        panel1Box2: {
+          title: 'Flow Microsegmentation & Security',
+          bullets: [
+            '• Nutanix Flow Network Security (Flow VPC)',
+            '• Application-Level Distributed Firewalling',
+            `• Primary Network CIDR: ${src.cidrBlock}`,
+            '• Zero-Trust Microseg Policies Active'
+          ]
+        },
+        panel1Box3: {
+          title: 'Local All-NVMe Storage Tier',
+          bullets: [
+            `• Nutanix Storage Pools (${src.storageTB} TiB Usable Capacity)`,
+            '• Inline Deduplication, Compression & Erasure Coding',
+            '• Resilient RF2 / RF3 Distributed Metadata',
+            `• Region / Facility: ${src.region}`
+          ]
+        },
+        panel2Header: '02. CAMPUS LEAF-SPINE & MICROSEGMENTATION',
+        panel2Box1: {
+          title: '100G Leaf-Spine Switch Mesh',
+          bullets: [
+            `• Connectivity: ${p.connectivity}`,
+            '• Dual Redundant 100 Gbps ToR Uplinks',
+            '• EVPN-VXLAN High-Speed Campus Fabric',
+            `• Active Interconnect Paths: ${p.interconnectLinks.length} Links`
+          ]
+        },
+        panel2Box2: {
+          title: 'Transit & Edge Routing Architecture',
+          bullets: [
+            `• Landing Zone Pattern: ${p.landingZone}`,
+            '• Multi-Chassis Dynamic BGP Route Peering',
+            '• Sub-Millisecond (<1ms) Intra-Cluster Latency',
+            '• Non-Blocking High-Bandwidth Core Backplane'
+          ]
+        },
+        panel2Box3: {
+          title: 'Perimeter NVA Firewall & WAF',
+          bullets: [
+            `• NVA Firewall: ${p.nvaFirewall}`,
+            `• Web Application Firewall: ${p.wafSolution}`,
+            '• Deep Packet Inspection (DPI) & Threat Prevention',
+            '• Egress Internet Breakout & Zero-Trust Inspection'
+          ]
+        },
+        panel3Header: '03. SECONDARY NUTANIX DR & OBJECTS SITE',
+        panel3Box1: {
+          title: 'Secondary Nutanix AHV DR Cluster',
+          bullets: [
+            `• ${tgt.hostCount}x ${tgt.nodeSku.split(' ')[0]} AHV Standby Nodes`,
+            `• Management CIDR: ${tgt.cidrBlock}`,
+            `• Disaster Recovery Region: ${tgt.region}`,
+            `• Sized for ${p.totalVMs} Protected Workloads`
+          ]
+        },
+        panel3Box2: {
+          title: 'Nutanix Files & Objects Cluster',
+          bullets: [
+            '• Scale-Out S3 Compatible Objects Fabric',
+            '• Enterprise SMB & NFS Clustered Shares',
+            '• Nutanix Mine Target for Immutable Backups',
+            '• Distributed Snapshot Journaling'
+          ]
+        },
+        panel3Box3: {
+          title: 'Disaster Recovery & Business Continuity',
+          bullets: [
+            `• Replication Engine: ${p.drEngine}`,
+            `• DR SLA: ${rpoText} | ${p.drRtoMinutes}-min RTO`,
+            `• Resilience Strategy: ${p.drStrategy}`,
+            '• Automated Failover Orchestration Runbooks'
+          ]
+        }
+      };
+
+    case 'nutanix-to-nc2':
+      return {
+        title: `${p.customerName} — Nutanix to NC2 on Azure Architecture`,
+        panel1Header: '01. ON-PREMISES NUTANIX CLUSTER',
+        panel1Box1: {
+          title: 'Nutanix AOS & AHV Hypervisor',
+          bullets: [
+            '• Prism Central Federation Management',
+            `• ${src.hostCount}x ${src.nodeSku.split(' ')[0]} Enterprise Nodes`,
+            `• ${p.totalVMs} Production Virtual Machines`,
+            `• AOS Distributed Storage Fabric (${src.storageTB} TiB)`
+          ]
+        },
+        panel1Box2: {
+          title: 'Nutanix Move Appliance Engine',
+          bullets: [
+            '• Automated Non-Disruptive VM Seeding Pipe',
+            '• In-Flight VirtIO Driver Injection Prep',
+            `• Source Network CIDR: ${src.cidrBlock}`,
+            '• Continuous Change-Block Tracking (CBT)'
+          ]
+        },
+        panel1Box3: {
+          title: 'On-Premises Dedicated Uplinks',
+          bullets: [
+            '• 10 Gbps Dedicated Interconnect Trunk',
+            '• Prism Pairing & Disaster Recovery Runbooks',
+            '• Zero-Downtime Migration Synchronization',
+            `• Facility Location: ${src.region}`
+          ]
+        },
+        panel2Header: '02. AZURE VIRTUAL WAN & EXPRESSROUTE FASTPATH',
+        panel2Box1: {
+          title: 'Azure ExpressRoute FastPath (10G)',
+          bullets: [
+            `• Physical Connectivity: ${p.connectivity}`,
+            '• Dual Redundant ExpressRoute Direct 10G',
+            '• Ultra-Low Latency (<2ms) FastPath Bypass',
+            `• Active Interconnect: ${p.interconnectLinks.length} Established Pipes`
+          ]
+        },
+        panel2Box2: {
+          title: 'Azure Virtual WAN & Security Hub',
+          bullets: [
+            `• Landing Zone Pattern: ${p.landingZone}`,
+            '• Azure vWAN Hub Transitive Route Peering',
+            '• Azure Route Server Dynamic BGP Learning',
+            '• Native Azure Services Backbone Peering'
+          ]
+        },
+        panel2Box3: {
+          title: 'Perimeter Security & NVA Inspection',
+          bullets: [
+            `• NVA Firewall: ${p.nvaFirewall}`,
+            `• Web Application Firewall: ${p.wafSolution}`,
+            '• Azure DDoS Protection & Egress Inspection',
+            '• Zero-Trust North-South Microsegmentation'
+          ]
+        },
+        panel3Header: '03. NUTANIX CLOUD CLUSTERS (NC2) ON AZURE',
+        panel3Box1: {
+          title: 'NC2 BareMetal Azure Cluster',
+          bullets: [
+            `• ${tgt.hostCount}x ${tgt.nodeSku.split(' ')[0]} Dedicated BareMetal`,
+            '• Native Delegated Azure vNet Subnet Integration',
+            `• Management CIDR: ${tgt.cidrBlock}`,
+            `• Target Azure Region: ${tgt.region}`
+          ]
+        },
+        panel3Box2: {
+          title: 'Prism Central Cross-Cloud Federation',
+          bullets: [
+            '• Unified Prism Central Single Pane of Glass',
+            '• Nutanix Flow VPC Virtual Networking',
+            '• Microsegmentation & Policy Mirroring',
+            '• Direct Azure API Integration'
+          ]
+        },
+        panel3Box3: {
+          title: 'Azure Storage Integration & Resilience',
+          bullets: [
+            `• Decoupled Storage Tier: ${storageText}`,
+            `• Replication Engine: ${p.drEngine}`,
+            `• DR SLA: ${rpoText} | ${p.drRtoMinutes}-min RTO`,
+            `• Cutover Strategy: ${p.drStrategy}`
+          ]
+        }
+      };
+
+    case 'vmware-to-nc2':
+      return {
+        title: `${p.customerName} — VMware to Nutanix NC2 Migration Blueprint`,
+        panel1Header: '01. LEGACY VMWARE VSPHERE SDDC',
+        panel1Box1: {
+          title: 'VMware vCenter Server & Compute',
+          bullets: [
+            '• VMware vCenter Server Appliance (VCSA)',
+            `• ${src.hostCount}x ${src.nodeSku.split(' ')[0]} ESXi Compute Hosts`,
+            `• ${p.totalVMs} Inventory Virtual Machines`,
+            '• Virtual Distributed Switches (vDS) Configured'
+          ]
+        },
+        panel1Box2: {
+          title: 'SAN / NAS Clustered Storage Tier',
+          bullets: [
+            '• Fibre Channel & iSCSI Clustered Arrays',
+            `• Total Storage Capacity: ${src.storageTB} TiB`,
+            `• Source Management CIDR: ${src.cidrBlock}`,
+            `• Datacenter Location: ${src.region}`
+          ]
+        },
+        panel1Box3: {
+          title: 'Legacy Network Segments',
+          bullets: [
+            '• VLAN Subsegments Discovered & Mapped',
+            '• Default Gateways & Broadcast Domains',
+            '• Migration Wave Sizing Completed',
+            '• Non-Disruptive Pre-Seeding Verified'
+          ]
+        },
+        panel2Header: '02. MIGRATION TRANSIT & MOVE FABRIC',
+        panel2Box1: {
+          title: 'Nutanix Move Appliance Fleet',
+          bullets: [
+            '• Distributed Move Migration Worker Fleet',
+            '• Cross-Hypervisor Conversion (ESXi to AHV)',
+            '• Automated VirtIO Driver Injection Pipe',
+            `• Active Interconnect: ${p.interconnectLinks.length} Links`
+          ]
+        },
+        panel2Box2: {
+          title: 'Dedicated High-Speed Transit Pipe',
+          bullets: [
+            `• Physical Connectivity: ${p.connectivity}`,
+            '• 10 Gbps Dedicated ExpressRoute / Interconnect',
+            '• Non-Disruptive Background Data Seeding',
+            '• Near-Zero Cutover Downtime (<5 min/wave)'
+          ]
+        },
+        panel2Box3: {
+          title: 'Transit Inspection & Security',
+          bullets: [
+            `• Migration Security NVA: ${p.nvaFirewall}`,
+            `• Web Application Firewall: ${p.wafSolution}`,
+            '• Encrypted TLS In-Transit Replication',
+            '• Egress Wave Traffic Shaper & QoS'
+          ]
+        },
+        panel3Header: '03. TARGET NUTANIX NC2 ON AZURE',
+        panel3Box1: {
+          title: 'Target NC2 BareMetal Cluster',
+          bullets: [
+            `• ${tgt.hostCount}x ${tgt.nodeSku.split(' ')[0]} BareMetal Nodes`,
+            '• Native Delegated Azure vNet Infrastructure',
+            `• Target Management CIDR: ${tgt.cidrBlock}`,
+            `• Target Deployment Region: ${tgt.region}`
+          ]
+        },
+        panel3Box2: {
+          title: 'AHV Virtualization & Flow VPC',
+          bullets: [
+            '• High-Performance Nutanix AHV Hypervisor',
+            '• Flow Virtual Networking & Microsegmentation',
+            '• Zero VMware Licensing Overhead in Cloud',
+            '• Prism Central Single Console Governance'
+          ]
+        },
+        panel3Box3: {
+          title: 'Cutover Governance & Resilience',
+          bullets: [
+            `• Migration Engine: ${p.drEngine}`,
+            `• Target SLA: ${rpoText} | ${p.drRtoMinutes}-min RTO`,
+            `• Cutover Model: ${p.drStrategy}`,
+            '• Post-Migration Reverse Replication Ready'
+          ]
+        }
+      };
+
+    case 'avs':
+      return {
+        title: `${p.customerName} — Azure VMware Solution (AVS) SDDC Blueprint`,
+        panel1Header: '01. ON-PREMISES VMWARE DATACENTER',
+        panel1Box1: {
+          title: 'VMware vCenter Server (VCSA)',
+          bullets: [
+            '• vCenter Server Appliance Fleet',
+            `• ${src.hostCount}x ${src.nodeSku.split(' ')[0]} ESXi Hosts`,
+            `• ${p.totalVMs} Virtual Machines Across Workload Tiers`,
+            '• Virtual Distributed Switches (VDS)'
+          ]
+        },
+        panel1Box2: {
+          title: 'SAN & NAS Storage Tier',
+          bullets: [
+            '• Fibre Channel / iSCSI Clustered Arrays',
+            `• Usable Capacity: ${src.storageTB} TiB`,
+            `• Management Network CIDR: ${src.cidrBlock}`,
+            `• Primary Datacenter: ${src.region}`
+          ]
+        },
+        panel1Box3: {
+          title: 'VMware HCX Connector Fleet',
+          bullets: [
+            '• HCX Interconnect (IX) Service Engine',
+            '• HCX Network Extension (NE) L2 Stretch',
+            '• HCX WAN Optimization (WO)',
+            '• Mobility Optimized Networking (MON)'
+          ]
+        },
+        panel2Header: '02. HYBRID TRANSIT & SECURITY ARCHITECTURE',
+        panel2Box1: {
+          title: 'Cloud Interconnect & Express Peering',
+          bullets: [
+            `• Physical Connectivity: ${p.connectivity}`,
+            '• Dual Redundant 10 Gbps BGP Cross-Connects',
+            '• Ultra-Low Latency Direct Peering (<2ms)',
+            `• Established Interconnect: ${p.interconnectLinks.length} Active Pipes`
+          ]
+        },
+        panel2Box2: {
+          title: 'Landing Zone Architecture',
+          bullets: [
+            `• Landing Zone Pattern: ${p.landingZone}`,
+            '• ExpressRoute Gateway / vWAN Hub Routing',
+            '• FastPath Acceleration Enabled',
+            '• Transitive Routing & Route Server Peering'
+          ]
+        },
+        panel2Box3: {
+          title: 'NVA Firewall & Perimeter WAF',
+          bullets: [
+            `• NVA Firewall: ${p.nvaFirewall}`,
+            `• Web Application Firewall: ${p.wafSolution}`,
+            '• Deep Packet Inspection (DPI) & IPS/IDS',
+            '• Egress Internet Breakout & Zero-Trust Inspection'
+          ]
+        },
+        panel3Header: '03. AZURE VMWARE SOLUTION SDDC CORE',
+        panel3Box1: {
+          title: 'Bare-Metal SDDC Cluster',
+          bullets: [
+            `• ${tgt.hostCount}x ${tgt.nodeSku.split(' ')[0]} Dedicated BareMetal`,
+            `• Management Network CIDR: ${tgt.cidrBlock}`,
+            `• Region: ${tgt.region}`,
+            `• Sized for ${p.totalVMs} Workloads with N+1 High Availability`
+          ]
+        },
+        panel3Box2: {
+          title: 'NSX-T Software Defined Networking',
+          bullets: [
+            '• Tier-0 Active-Active Gateway with ECMP Peering',
+            '• Segregated Tier-1 Gateways across Workload Segments',
+            '• Distributed Firewall (DFW) Microsegmentation Active',
+            '• Direct vNet Peering to Azure Native PaaS'
+          ]
+        },
+        panel3Box3: {
+          title: 'Decoupled Storage & Disaster Recovery',
+          bullets: [
+            `• Storage Tier: ${storageText}`,
+            `• Replication Engine: ${p.drEngine}`,
+            `• DR SLA: ${rpoText} | ${p.drRtoMinutes}-min RTO`,
+            `• Strategy: ${p.drStrategy}`
+          ]
+        }
+      };
+
+    case 'vmc-aws':
+      return {
+        title: `${p.customerName} — VMware Cloud on AWS (VMC) Architecture`,
+        panel1Header: '01. ON-PREMISES VMWARE ENTERPRISE SDDC',
+        panel1Box1: {
+          title: 'VMware vSphere Enterprise SDDC',
+          bullets: [
+            '• Enterprise vCenter Server Appliance',
+            `• ${src.hostCount}x ${src.nodeSku.split(' ')[0]} Compute Hosts`,
+            `• ${p.totalVMs} Production Virtual Machines`,
+            '• DRS & High-Availability Clusters Configured'
+          ]
+        },
+        panel1Box2: {
+          title: 'SAN / NAS Storage Tier',
+          bullets: [
+            '• Fibre Channel & Clustered NFS Arrays',
+            `• Usable Capacity: ${src.storageTB} TiB`,
+            `• Source Network CIDR: ${src.cidrBlock}`,
+            `• Enterprise Datacenter: ${src.region}`
+          ]
+        },
+        panel1Box3: {
+          title: 'VMware HCX Connector Fleet',
+          bullets: [
+            '• HCX Interconnect & Network Extension NE',
+            '• L2 Stretched Segments into AWS SDDC',
+            '• Mobility Optimized Networking (MON)',
+            '• HCX Bulk & Replication Assist vMotion'
+          ]
+        },
+        panel2Header: '02. AWS DIRECT CONNECT & TRANSIT GATEWAY',
+        panel2Box1: {
+          title: 'AWS Direct Connect Gateway (10G)',
+          bullets: [
+            `• Connectivity: ${p.connectivity}`,
+            '• Dual 10G AWS Direct Connect Dedicated Circuits',
+            '• Direct Connect Gateway Dynamic BGP Route Learning',
+            '• Jumbo Frames (9001 MTU) High-Speed Transport'
+          ]
+        },
+        panel2Box2: {
+          title: 'AWS Transit Gateway (TGW) Hub',
+          bullets: [
+            `• Landing Zone Pattern: ${p.landingZone}`,
+            '• Centralized Transit Gateway Inspection VPC',
+            '• Multi-Account AWS RAM Transit Sharing',
+            '• Appliance Mode Enabled for Stateful Flow'
+          ]
+        },
+        panel2Box3: {
+          title: 'AWS Network Firewall & Security',
+          bullets: [
+            `• Next-Gen Firewall: ${p.nvaFirewall}`,
+            `• Web Application Firewall: ${p.wafSolution}`,
+            '• AWS Shield DDoS Mitigation & Route 53 Resolver',
+            '• Egress Internet Breakout via NAT Gateways'
+          ]
+        },
+        panel3Header: '03. VMWARE CLOUD ON AWS SDDC CORE',
+        panel3Box1: {
+          title: 'VMC Bare-Metal SDDC Cluster',
+          bullets: [
+            `• ${tgt.hostCount}x ${tgt.nodeSku.split(' ')[0]} NVMe Metal Hosts`,
+            `• SDDC Management CIDR: ${tgt.cidrBlock}`,
+            `• Dedicated AWS Region: ${tgt.region}`,
+            '• NSX-T SDDC Multi-Tier Routing Core'
+          ]
+        },
+        panel3Box2: {
+          title: 'Connected VPC & High-Speed ENI',
+          bullets: [
+            '• 25 Gbps High-Speed Connected VPC ENI',
+            '• Sub-Millisecond Cross-VPC Latency to Native AWS',
+            '• Direct Amazon S3, RDS, DynamoDB Access',
+            '• Zero Inter-AZ Egress Penalty for Connected VPC'
+          ]
+        },
+        panel3Box3: {
+          title: 'Decoupled Storage & Disaster Recovery',
+          bullets: [
+            `• Storage Tier: ${storageText}`,
+            `• Replication Engine: ${p.drEngine}`,
+            `• DR SLA: ${rpoText} | ${p.drRtoMinutes}-min RTO`,
+            `• Strategy: ${p.drStrategy}`
+          ]
+        }
+      };
+
+    case 'gcve':
+      return {
+        title: `${p.customerName} — Google Cloud VMware Engine (GCVE) Blueprint`,
+        panel1Header: '01. ON-PREMISES VMWARE HYBRID DATACENTER',
+        panel1Box1: {
+          title: 'VMware vSphere Private Cloud',
+          bullets: [
+            '• VMware vCenter Server 8.0 Deployment',
+            `• ${src.hostCount}x ${src.nodeSku.split(' ')[0]} Enterprise Hosts`,
+            `• ${p.totalVMs} Production Virtual Machines`,
+            '• Clustered Resource Pools & DRS'
+          ]
+        },
+        panel1Box2: {
+          title: 'Fibre Channel SAN Storage Fabric',
+          bullets: [
+            '• Enterprise Clustered SAN / NAS Arrays',
+            `• Usable Storage Allocation: ${src.storageTB} TiB`,
+            `• Corporate CIDR Block: ${src.cidrBlock}`,
+            `• Enterprise Facility: ${src.region}`
+          ]
+        },
+        panel1Box3: {
+          title: 'VMware HCX Connector Fleet',
+          bullets: [
+            '• HCX Bulk & Cold Migration Workers',
+            '• Low-Latency L2 Network Extension NE',
+            '• WAN Optimization Engine Active',
+            '• Automated Route Injection into GCVE'
+          ]
+        },
+        panel2Header: '02. GOOGLE CLOUD DEDICATED INTERCONNECT',
+        panel2Box1: {
+          title: 'Google Cloud Interconnect (10G)',
+          bullets: [
+            `• Connectivity: ${p.connectivity}`,
+            '• Dedicated Interconnect with 99.99% SLA',
+            '• Redundant Cloud Router BGP Peering Sessions',
+            '• Direct Access to Google Cloud Global Network'
+          ]
+        },
+        panel2Box2: {
+          title: 'Google Cloud VPC & Cloud Router',
+          bullets: [
+            `• Landing Zone Pattern: ${p.landingZone}`,
+            '• Dynamic Cloud Router Subnet Sharing',
+            '• Private Google Access & Cloud NAT',
+            '• High-Availability BGP Route Advertisement'
+          ]
+        },
+        panel2Box3: {
+          title: 'Cloud Armor & Perimeter Security',
+          bullets: [
+            `• Next-Gen Firewall: ${p.nvaFirewall}`,
+            `• Web Application Firewall: ${p.wafSolution}`,
+            '• Google Cloud Armor Adaptive Threat Protection',
+            '• Private Service Connect (PSC) Endpoints'
+          ]
+        },
+        panel3Header: '03. GOOGLE CLOUD VMWARE ENGINE SDDC',
+        panel3Box1: {
+          title: 'GCVE Bare-Metal SDDC Cluster',
+          bullets: [
+            `• ${tgt.hostCount}x ${tgt.nodeSku.split(' ')[0]} Bare-Metal Hosts`,
+            `• Management Network CIDR: ${tgt.cidrBlock}`,
+            `• Dedicated Cloud Region: ${tgt.region}`,
+            '• VMware vSphere 8.0 & vSAN Enterprise'
+          ]
+        },
+        panel3Box2: {
+          title: '100 Gbps Private Services Access',
+          bullets: [
+            '• 100 Gbps Low-Latency Interconnect to VPC',
+            '• Zero Egress Fees between GCVE and GCP VPC',
+            '• Native BigQuery, Vertex AI, Cloud Storage Access',
+            '• NSX-T Tier-0 Active-Active Routing'
+          ]
+        },
+        panel3Box3: {
+          title: 'Decoupled Storage & Disaster Recovery',
+          bullets: [
+            `• Storage Tier: ${storageText}`,
+            `• Replication Engine: ${p.drEngine}`,
+            `• DR SLA: ${rpoText} | ${p.drRtoMinutes}-min RTO`,
+            `• Strategy: ${p.drStrategy}`
+          ]
+        }
+      };
+
+    case 'aws-native':
+      return {
+        title: `${p.customerName} — AWS Native Multi-VPC Architecture`,
+        panel1Header: '01. ON-PREMISES ENTERPRISE DATACENTER & EDGE',
+        panel1Box1: {
+          title: 'Branch Datacenter & Edge Compute',
+          bullets: [
+            '• Corporate Edge & Co-Location Facility',
+            `• ${src.hostCount}x ${src.nodeSku.split(' ')[0]} Edge Nodes`,
+            `• ${p.totalVMs} Legacy Workloads & Factory Systems`,
+            '• Local SCADA & Manufacturing Controllers'
+          ]
+        },
+        panel1Box2: {
+          title: 'On-Premises Network Core',
+          bullets: [
+            '• Core Leaf-Spine Switch Architecture',
+            `• Usable Storage Capacity: ${src.storageTB} TiB`,
+            `• On-Premises CIDR: ${src.cidrBlock}`,
+            `• Edge Facility: ${src.region}`
+          ]
+        },
+        panel1Box3: {
+          title: 'Hybrid Uplink Gateways',
+          bullets: [
+            '• Redundant Customer Gateways (CGW)',
+            '• Dual BGP Peering Sessions to AWS Direct Connect',
+            '• Automated IPsec VPN Failover Paths',
+            '• Active Route Health Monitoring'
+          ]
+        },
+        panel2Header: '02. AWS TRANSIT GATEWAY & INSPECTION HUB',
+        panel2Box1: {
+          title: 'AWS Direct Connect & Transit Gateway',
+          bullets: [
+            `• Connectivity: ${p.connectivity}`,
+            '• Dual 10G AWS Direct Connect Circuits',
+            '• AWS Transit Gateway (TGW) Hub Core',
+            '• Multi-Account Transit Gateway Sharing (RAM)'
+          ]
+        },
+        panel2Box2: {
+          title: 'Centralized Inspection VPC',
+          bullets: [
+            `• Landing Zone Pattern: ${p.landingZone}`,
+            '• AWS Network Firewall Stateful Inspection',
+            '• Appliance Mode Enabled for Stateful Flow',
+            '• Centralized Egress NAT & VPC Endpoints'
+          ]
+        },
+        panel2Box3: {
+          title: 'Perimeter Security & Edge Ingress',
+          bullets: [
+            `• Next-Gen Firewall: ${p.nvaFirewall}`,
+            `• Web Application Firewall: ${p.wafSolution}`,
+            '• AWS Shield Advanced & Route 53 Resolver',
+            '• Centralized CloudWatch & VPC Flow Logs'
+          ]
+        },
+        panel3Header: '03. AWS NATIVE PRODUCTION MULTI-AZ ARCHITECTURE',
+        panel3Box1: {
+          title: 'Production Multi-AZ AWS VPC',
+          bullets: [
+            `• ${tgt.hostCount}x ${tgt.nodeSku.split(' ')[0]} Managed Hub`,
+            '• Deployed across 3 Availability Zones (AZs)',
+            `• VPC CIDR Block: ${tgt.cidrBlock}`,
+            `• Primary Cloud Region: ${tgt.region}`
+          ]
+        },
+        panel3Box2: {
+          title: 'Containerized & Serverless Workloads',
+          bullets: [
+            '• Amazon EKS Managed Kubernetes Clusters',
+            '• Amazon Aurora PostgreSQL Global Multi-AZ DB',
+            '• Auto Scaling EC2 Compute Fleet',
+            '• AWS Secrets Manager & KMS Security'
+          ]
+        },
+        panel3Box3: {
+          title: 'Resilience Fabric & S3 Glacier DR',
+          bullets: [
+            `• Backup & S3 Storage Fabric (${tgt.storageTB} TiB)`,
+            `• Replication Engine: ${p.drEngine}`,
+            `• DR SLA: ${rpoText} | ${p.drRtoMinutes}-min RTO`,
+            `• Strategy: ${p.drStrategy}`
+          ]
+        }
+      };
+
+    case 'gcp-native':
+      return {
+        title: `${p.customerName} — Google Cloud Shared VPC Architecture`,
+        panel1Header: '01. CORPORATE ON-PREM DATACENTER & BRANCHES',
+        panel1Box1: {
+          title: 'Corporate Headquarters Datacenter',
+          bullets: [
+            '• Enterprise Core Datacenter Location',
+            `• ${src.hostCount}x ${src.nodeSku.split(' ')[0]} Enterprise Servers`,
+            `• ${p.totalVMs} Core Enterprise Application Workloads`,
+            `• Dedicated SAN Infrastructure (${src.storageTB} TiB)`
+          ]
+        },
+        panel1Box2: {
+          title: 'On-Premises BGP Routing Core',
+          bullets: [
+            '• Multi-Protocol BGP Edge Routers',
+            '• Redundant Customer Premise Equipment (CPE)',
+            `• Corporate CIDR Subnets: ${src.cidrBlock}`,
+            `• Datacenter Facility: ${src.region}`
+          ]
+        },
+        panel1Box3: {
+          title: 'Cloud Interconnect VLAN Terminus',
+          bullets: [
+            '• Partner / Dedicated Interconnect Attachments',
+            '• 10G Dual Redundant Uplink Paths',
+            '• High-Availability BGP Route Advertisement',
+            '• Continuous Latency & BFD Telemetry'
+          ]
+        },
+        panel2Header: '02. GOOGLE CLOUD INTERCONNECT & TRANSIT HUB',
+        panel2Box1: {
+          title: 'Google Cloud Interconnect & Router',
+          bullets: [
+            `• Connectivity: ${p.connectivity}`,
+            '• Dedicated Interconnect with 99.99% SLA',
+            '• Cloud Router Dynamic Route Exchange',
+            '• Private Google Access Enabled'
+          ]
+        },
+        panel2Box2: {
+          title: 'Transit Security & Cloud IDS/IPS',
+          bullets: [
+            `• Landing Zone Pattern: ${p.landingZone}`,
+            '• Cloud IDS Deep Packet Inspection',
+            '• Cloud NAT Gateway for Secure Egress',
+            '• VPC Service Controls (VPC-SC) Perimeter'
+          ]
+        },
+        panel2Box3: {
+          title: 'Cloud Armor & Edge Defense',
+          bullets: [
+            `• Next-Gen Firewall: ${p.nvaFirewall}`,
+            `• Web Application Firewall: ${p.wafSolution}`,
+            '• Google Cloud Armor Adaptive Protection',
+            '• Cloud DNS Peering & Route Forwarding'
+          ]
+        },
+        panel3Header: '03. GCP SHARED VPC & MANAGED LANDING ZONE',
+        panel3Box1: {
+          title: 'Shared VPC Host Project Architecture',
+          bullets: [
+            `• Centralized Shared VPC Network: ${tgt.cidrBlock}`,
+            '• Service Projects Attached across Multi-Tiers',
+            `• Primary Cloud Region: ${tgt.region}`,
+            `• Sized for ${p.totalVMs} Cloud Workloads`
+          ]
+        },
+        panel3Box2: {
+          title: 'Managed Compute & GKE Clusters',
+          bullets: [
+            '• Google Kubernetes Engine (GKE) Autopilot',
+            '• Cloud SQL Enterprise HA Clustered Instances',
+            '• Compute Engine Managed Instance Groups (MIG)',
+            '• Cloud Logging & Monitoring Telemetry'
+          ]
+        },
+        panel3Box3: {
+          title: 'Multi-Region Cloud Storage & Resilience',
+          bullets: [
+            `• Cloud Storage Multi-Region Buckets (${tgt.storageTB} TiB)`,
+            `• Replication Engine: ${p.drEngine}`,
+            `• DR SLA: ${rpoText} | ${p.drRtoMinutes}-min RTO`,
+            `• Strategy: ${p.drStrategy}`
+          ]
+        }
+      };
+
+    case 'multi-cloud':
+    default:
+      return {
+        title: `${p.customerName} — Multi-Cloud Nutanix & Hyperscaler Mesh`,
+        panel1Header: '01. ON-PREMISES NUTANIX AOS / AHV DATACENTER',
+        panel1Box1: {
+          title: 'Nutanix Private Cloud Datacenter',
+          bullets: [
+            '• Prism Central Unified Management Plane',
+            `• ${src.hostCount}x ${src.nodeSku.split(' ')[0]} AHV Nodes`,
+            `• ${p.totalVMs} Core Virtual Machines`,
+            `• AOS Distributed Storage Fabric (${src.storageTB} TiB)`
+          ]
+        },
+        panel1Box2: {
+          title: 'Flow Microsegmentation & Policies',
+          bullets: [
+            '• Flow Virtual Networking & Microsegmentation',
+            `• Local Network CIDR: ${src.cidrBlock}`,
+            '• Zero-Trust Campus Isolation',
+            `• Headquarters Datacenter: ${src.region}`
+          ]
+        },
+        panel1Box3: {
+          title: 'Multi-Cloud Replication Engines',
+          bullets: [
+            '• Nutanix Move Multi-Target Replication',
+            '• Prism Disaster Recovery Pairing',
+            '• Continuous Snapshot Delta Streams',
+            '• Cross-Cloud Storage Orchestration'
+          ]
+        },
+        panel2Header: '02. MULTI-CLOUD INTERCONNECT & TRANSIT MESH',
+        panel2Box1: {
+          title: 'Equinix / Megaport Fabric Cloud Router',
+          bullets: [
+            `• Connectivity: ${p.connectivity}`,
+            '• Multi-Cloud Direct Connect & ExpressRoute Fabric',
+            `• Active Interconnect: ${p.interconnectLinks.length} Multi-Cloud Links`,
+            '• Dynamic Multi-Cloud BGP Route Exchange'
+          ]
+        },
+        panel2Box2: {
+          title: 'Multi-Cloud Transit Hub Architecture',
+          bullets: [
+            `• Landing Zone Pattern: ${p.landingZone}`,
+            '• Anycast Global Route Optimization',
+            '• BGP Route Server Multi-Cloud Mesh',
+            '• Direct Cross-Cloud VPC/vNet Interconnect'
+          ]
+        },
+        panel2Box3: {
+          title: 'Multi-Cloud Edge Defense & WAF',
+          bullets: [
+            `• Perimeter Next-Gen Firewall: ${p.nvaFirewall}`,
+            `• Web Application Firewall: ${p.wafSolution}`,
+            '• Global DDoS Protection & Egress Scrubbing',
+            '• Centralized Multi-Cloud Security Governance'
+          ]
+        },
+        panel3Header: '03. DISTRIBUTED HYPERSCALER TARGET FABRIC',
+        panel3Box1: {
+          title: 'Nutanix NC2 on Azure BareMetal',
+          bullets: [
+            `• ${tgt.hostCount}x ${tgt.nodeSku.split(' ')[0]} BareMetal Nodes`,
+            `• Delegated Azure vNet Subnet (${tgt.cidrBlock})`,
+            `• Deployment Region: ${tgt.region}`,
+            `• Sized for ${p.totalVMs} Production Workloads`
+          ]
+        },
+        panel3Box2: {
+          title: 'AWS Native VPC Workload Tier',
+          bullets: [
+            '• AWS Production VPC Attachment via TGW',
+            '• Amazon EKS Managed Kubernetes Services',
+            '• Amazon FSx for NetApp ONTAP Storage',
+            '• S3 Multi-Region Data Mirroring'
+          ]
+        },
+        panel3Box3: {
+          title: 'Unified Cross-Cloud Storage & Resilience',
+          bullets: [
+            `• Multi-Cloud Unified Storage Fabric (${tgt.storageTB} TiB)`,
+            `• Replication Engine: ${p.drEngine}`,
+            `• DR SLA: ${rpoText} | ${p.drRtoMinutes}-min RTO`,
+            `• Strategy: ${p.drStrategy}`
+          ]
+        }
+      };
+  }
+}
+
 export const DesignGeneratorPage: React.FC = () => {
   const { setIsBriefingModalOpen } = useCustomization();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -156,6 +1026,15 @@ export const DesignGeneratorPage: React.FC = () => {
   const [saveSuccessNotice, setSaveSuccessNotice] = useState<string | null>(null);
   const [activeCategoryTab, setActiveCategoryTab] = useState<'all' | 'nutanix' | 'sddc' | 'native' | 'migration'>('all');
   const [canvasMode, setCanvasMode] = useState<'interactive' | 'static-vector'>('interactive');
+
+  // Step 3 Tabbed Inspector State
+  const [step3ActiveTab, setStep3ActiveTab] = useState<'topology' | 'networking' | 'dr'>('topology');
+
+  // Guardrail Modals for Template Switch & Cascade Deletion Protection
+  const [showTemplateSwitchModal, setShowTemplateSwitchModal] = useState<boolean>(false);
+  const [pendingTemplateSwitch, setPendingTemplateSwitch] = useState<ArchitectureTemplateId | null>(null);
+  const [showDeleteEnvModal, setShowDeleteEnvModal] = useState<boolean>(false);
+  const [pendingDeleteEnvId, setPendingDeleteEnvId] = useState<string | null>(null);
 
   // Interactive Canvas Interconnect & Inspector States
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -294,7 +1173,134 @@ export const DesignGeneratorPage: React.FC = () => {
     }
   }, [cloudPlatform]);
 
-  const handleSelectTemplate = (template: ArchitectureTemplateId) => {
+  // Single Source of Truth (SSOT): Canonical metrics derived dynamically from topologyEnvironments
+  const topologyMetrics = useMemo(() => {
+    const totalHosts = topologyEnvironments.reduce((acc, e) => acc + (e.hostCount || 0), 0);
+    const totalVMs = topologyEnvironments.reduce((acc, e) => acc + (e.vmCount ?? Math.round((e.totalVcpu || 0) / 2.5)), 0);
+    const totalVcpu = topologyEnvironments.reduce((acc, e) => acc + (e.totalVcpu || 0), 0);
+    const totalRamGB = topologyEnvironments.reduce((acc, e) => acc + (e.totalRamGB || 0), 0);
+    const totalStorageTB = topologyEnvironments.reduce((acc, e) => acc + (e.storageTB || 0), 0);
+    const primarySource = topologyEnvironments.find(e => e.tier === 'source') || topologyEnvironments[0];
+    const primaryTransit = topologyEnvironments.find(e => e.tier === 'transit') || topologyEnvironments[1];
+    const primaryTarget = topologyEnvironments.find(e => e.tier === 'target') || topologyEnvironments[topologyEnvironments.length - 1];
+    return { totalHosts, totalVMs, totalVcpu, totalRamGB, totalStorageTB, primarySource, primaryTransit, primaryTarget };
+  }, [topologyEnvironments]);
+
+  // Synchronize canonical topology updates while strictly preserving canvas coordinates
+  const handleUpdateNodeSpec = (envId: string, partial: Partial<EnvironmentNode>) => {
+    setTopologyEnvironments(prev =>
+      prev.map(n => {
+        if (n.id !== envId) return n;
+        const updated = { ...n, ...partial };
+        // Automatically scale vCPU and RAM if host count changes and totalVcpu wasn't explicitly supplied
+        if (partial.hostCount !== undefined && partial.totalVcpu === undefined) {
+          const sku = updated.nodeSku || '';
+          const coresPerHost = sku.includes('64') || sku.includes('i4i') ? 64 : sku.includes('72') || sku.includes('ve1') ? 72 : 36;
+          const ramPerHost = sku.includes('1024') || sku.includes('i4i') ? 1024 : sku.includes('768') || sku.includes('AN36P') ? 768 : 576;
+          updated.totalVcpu = updated.hostCount * coresPerHost;
+          updated.totalRamGB = updated.hostCount * ramPerHost;
+        }
+        return updated;
+      })
+    );
+  };
+
+  const getAvailableSkusForPlatform = (platform: CloudPlatformType): string[] => {
+    if (platform === 'Nutanix AHV') {
+      return [
+        'NX-8170-G9 All-NVMe (Dual Intel Xeon)',
+        'NX-3170-G9 All-Flash (Intel Xeon)',
+        'NX-8155-G9 Dense Storage (Dual Intel Xeon)',
+        'NX-1065-G8 Edge / ROBO'
+      ];
+    }
+    if (platform === 'Nutanix NC2 on Azure') {
+      return [
+        'AN36P (36 cores, 768GB RAM, 19.2TB NVMe)',
+        'AN36 (36 cores, 576GB RAM, 15.3TB NVMe)',
+        'AN64 (64 cores, 1024GB RAM, 30.7TB NVMe)'
+      ];
+    }
+    if (platform === 'Azure VMware Solution') {
+      return [
+        'AV36P (36 cores, 576GB RAM, 15.3TB NVMe)',
+        'AV64 (64 cores, 1024GB RAM, 30.7TB NVMe)',
+        'AV48 (48 cores, 768GB RAM)',
+        'AV52 (52 cores, 1536GB RAM)',
+        'AV36 (36 cores, 576GB RAM)'
+      ];
+    }
+    if (platform === 'VMware Cloud on AWS') {
+      return [
+        'i4i.metal (64 cores, 1024GB RAM, 30TB NVMe)',
+        'i3en.metal (96 cores, 768GB RAM, 45TB NVMe)',
+        'm7i.metal-24xl (96 cores, 384GB RAM)'
+      ];
+    }
+    if (platform === 'Google Cloud VMware Engine') {
+      return [
+        've1-standard-72 (72 cores, 768GB RAM, 19.2TB NVMe)',
+        've2-standard-128 (128 cores, 2048GB RAM, 38.4TB NVMe)'
+      ];
+    }
+    if (platform === 'AWS Native') {
+      return [
+        'AWS Native Multi-AZ VPC Hub (EKS / EC2)',
+        'c6i.metal (128 vCPU, 256GB RAM)',
+        'r6i.metal (128 vCPU, 1024GB RAM)'
+      ];
+    }
+    if (platform === 'GCP Native') {
+      return [
+        'GCP Shared VPC Host Project (GKE / Cloud SQL)',
+        'c2-standard-60 Compute Cluster',
+        'm1-ultramem-160 Memory Optimized'
+      ];
+    }
+    return [
+      'Dell PowerEdge R750 (ESXi 8.0u2, NVMe)',
+      'Cisco UCS B200 M5 (ESXi 8.0)',
+      'HPE ProLiant DL380 Gen10 (ESXi 8.0)',
+      'Custom Enterprise Bare-Metal Host'
+    ];
+  };
+
+  // User Customizations detection for Template Switch Guardrail
+  const checkHasUserCustomizations = (currentTemplate: ArchitectureTemplateId = activeTemplate): boolean => {
+    const defaults = getDefaultEnvironmentsForTemplate(currentTemplate);
+    const defaultLinks = getDefaultInterconnectLinksForTemplate(currentTemplate);
+    if (topologyEnvironments.length !== defaults.length) return true;
+    if (interconnectLinks.length !== defaultLinks.length) return true;
+    for (let i = 0; i < topologyEnvironments.length; i++) {
+      const cur = topologyEnvironments[i];
+      const def = defaults[i];
+      if (!def) return true;
+      if (
+        cur.name !== def.name ||
+        cur.hostCount !== def.hostCount ||
+        cur.nodeSku !== def.nodeSku ||
+        cur.storageTB !== def.storageTB ||
+        cur.cidrBlock !== def.cidrBlock ||
+        (cur.vmCount !== undefined && cur.vmCount !== def.vmCount)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Intercept track switch with user customization verification
+  const handleTrackClick = (template: ArchitectureTemplateId) => {
+    if (template === activeTemplate) return;
+    if (checkHasUserCustomizations()) {
+      setPendingTemplateSwitch(template);
+      setShowTemplateSwitchModal(true);
+    } else {
+      applyTemplateSwitch(template);
+    }
+  };
+
+  const applyTemplateSwitch = (template: ArchitectureTemplateId) => {
     setActiveTemplate(template);
     const newEnvs = getDefaultEnvironmentsForTemplate(template);
     const newLinks = getDefaultInterconnectLinksForTemplate(template);
@@ -365,6 +1371,23 @@ export const DesignGeneratorPage: React.FC = () => {
       setDrRpoMinutes(15);
       setDrRtoMinutes(45);
       setDrStrategy('Hot Standby (Full Cluster)');
+    }
+  };
+
+  // Safe wrapper that enforces the customization check
+  const handleSelectTemplate = (template: ArchitectureTemplateId) => {
+    handleTrackClick(template);
+  };
+
+  // Environment Deletion & Cascade Protection
+  const promptRemoveEnvironment = (idToRemove: string) => {
+    if (topologyEnvironments.length <= 1) return;
+    const connected = interconnectLinks.filter(l => l.sourceId === idToRemove || l.targetId === idToRemove);
+    if (connected.length > 0) {
+      setPendingDeleteEnvId(idToRemove);
+      setShowDeleteEnvModal(true);
+    } else {
+      handleRemoveEnvironment(idToRemove);
     }
   };
 
@@ -588,12 +1611,6 @@ export const DesignGeneratorPage: React.FC = () => {
     setShowLinkModal(false);
   };
 
-  const handleUpdateNodeSpec = (nodeId: string, updates: Partial<EnvironmentNode>) => {
-    setTopologyEnvironments(prev =>
-      prev.map(n => (n.id === nodeId ? { ...n, ...updates } : n))
-    );
-  };
-
   const getPlatformResilienceWarnings = () => {
     const warnings: { type: 'info' | 'warning'; text: string }[] = [];
     const hasNutanix = topologyEnvironments.some(e => e.platform.includes('Nutanix'));
@@ -641,7 +1658,7 @@ export const DesignGeneratorPage: React.FC = () => {
       ? 'Amazon FSx for NetApp ONTAP'
       : 'Google Cloud NetApp Volumes (GCNV)';
 
-  // 4K Canvas Drawing Engine (3840x2160)
+  // 4K Canvas Drawing Engine (3840x2160) - Track-Aware for All 9 Enterprise Tracks
   const draw4KCanvas = (targetCanvas: HTMLCanvasElement) => {
     const ctx = targetCanvas.getContext('2d');
     if (!ctx) return;
@@ -675,6 +1692,25 @@ export const DesignGeneratorPage: React.FC = () => {
       ctx.stroke();
     }
 
+    const spec = buildTrackVisualSpec(activeTemplate, {
+      customerName,
+      sourceEnv: topologyMetrics.primarySource,
+      transitEnv: topologyMetrics.primaryTransit,
+      targetEnv: topologyMetrics.primaryTarget,
+      totalVMs: topologyMetrics.totalVMs,
+      interconnectLinks,
+      connectivity,
+      landingZone,
+      nvaFirewall,
+      wafSolution,
+      drEngine,
+      drRpoMinutes,
+      drRtoMinutes,
+      drStrategy,
+      externalStorageName,
+      decoupledStorageTB
+    });
+
     // 2. Blueprint Title Header Box
     ctx.fillStyle = '#0f172a';
     ctx.strokeStyle = '#06b6d4';
@@ -685,79 +1721,55 @@ export const DesignGeneratorPage: React.FC = () => {
     ctx.stroke();
 
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 54px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText(`${customerName.toUpperCase()} — HYBRID CLOUD TOPOLOGY BLUEPRINT`, 130, 165);
+    ctx.font = 'bold 50px "Plus Jakarta Sans", sans-serif';
+    ctx.fillText(spec.title.toUpperCase(), 130, 165);
 
     ctx.fillStyle = '#94a3b8';
-    ctx.font = '30px "JetBrains Mono", monospace';
+    ctx.font = '28px "JetBrains Mono", monospace';
     ctx.fillText(
-      `ARCHITECT: ${architectName}  |  DATE: ${projectDate}  |  TARGET: ${cloudPlatform} (${calculatedCloudNodes}x ${nodeSku})  |  DR: ${drEngine}`,
+      `ARCHITECT: ${architectName}  |  DATE: ${projectDate}  |  TRACK: ${activeTemplate.toUpperCase()}  |  DR: ${drEngine}`,
       130,
       230
     );
 
-    // 3. Panel 1: On-Premises SDDC (Left)
-    const p1X = 80;
-    const p1Y = 330;
-    const pWidth = 1100;
     const pHeight = 1720;
 
+    // Helper to draw a box with bullet items
+    const drawPanelBox = (boxX: number, boxY: number, boxW: number, boxH: number, title: string, bullets: string[], titleColor: string = '#ffffff', boxBg: string = 'rgba(30, 41, 59, 0.8)', borderColor: string = '#475569') => {
+      ctx.fillStyle = boxBg;
+      ctx.fillRect(boxX, boxY, boxW, boxH);
+      ctx.strokeStyle = borderColor;
+      ctx.strokeRect(boxX, boxY, boxW, boxH);
+      ctx.fillStyle = titleColor;
+      ctx.font = 'bold 30px "Plus Jakarta Sans", sans-serif';
+      ctx.fillText(title, boxX + 30, boxY + 60);
+      ctx.fillStyle = '#cbd5e1';
+      ctx.font = '24px "JetBrains Mono", monospace';
+      bullets.forEach((bullet, idx) => {
+        ctx.fillText(bullet, boxX + 30, boxY + 120 + idx * 50);
+      });
+    };
+
+    // 3. Panel 1 (Left Tier)
+    const p1X = 80;
+    const p1Y = 330;
+    const p1Width = 1100;
+
     ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
-    ctx.fillRect(p1X, p1Y, pWidth, pHeight);
+    ctx.fillRect(p1X, p1Y, p1Width, pHeight);
     ctx.strokeStyle = '#334155';
     ctx.lineWidth = 2;
-    ctx.strokeRect(p1X, p1Y, pWidth, pHeight);
+    ctx.strokeRect(p1X, p1Y, p1Width, pHeight);
 
     ctx.fillStyle = '#06b6d4';
     ctx.font = 'bold 36px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText('01. ON-PREMISES DATACENTER', p1X + 40, p1Y + 70);
+    ctx.fillText(spec.panel1Header, p1X + 40, p1Y + 70);
 
-    // Box 1.1: vCenter Management
-    ctx.fillStyle = 'rgba(30, 41, 59, 0.8)';
-    ctx.fillRect(p1X + 40, p1Y + 120, pWidth - 80, 360);
-    ctx.strokeStyle = '#475569';
-    ctx.strokeRect(p1X + 40, p1Y + 120, pWidth - 80, 360);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 30px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText('VMware vCenter Server (VCSA)', p1X + 70, p1Y + 180);
-    ctx.fillStyle = '#cbd5e1';
-    ctx.font = '24px "JetBrains Mono", monospace';
-    ctx.fillText(`• ${vCenterCount} vCenter Server Appliance(s)`, p1X + 70, p1Y + 240);
-    ctx.fillText(`• ${clusterCount} ESXi Clusters (${esxiHostCount} Compute Hosts)`, p1X + 70, p1Y + 290);
-    ctx.fillText(`• ${totalVMCount} Virtual Machines Across Workload Tiers`, p1X + 70, p1Y + 340);
-    ctx.fillText(`• ${vdsCount} Virtual Distributed Switches (VDS)`, p1X + 70, p1Y + 390);
+    drawPanelBox(p1X + 40, p1Y + 120, p1Width - 80, 360, spec.panel1Box1.title, spec.panel1Box1.bullets);
+    drawPanelBox(p1X + 40, p1Y + 520, p1Width - 80, 340, spec.panel1Box2.title, spec.panel1Box2.bullets);
+    drawPanelBox(p1X + 40, p1Y + 900, p1Width - 80, 420, spec.panel1Box3.title, spec.panel1Box3.bullets, '#34d399', 'rgba(6, 78, 59, 0.7)', '#10b981');
 
-    // Box 1.2: SAN/NAS Datastores
-    ctx.fillStyle = 'rgba(30, 41, 59, 0.8)';
-    ctx.fillRect(p1X + 40, p1Y + 520, pWidth - 80, 340);
-    ctx.strokeStyle = '#475569';
-    ctx.strokeRect(p1X + 40, p1Y + 520, pWidth - 80, 340);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 30px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText('SAN & NAS Storage Tier', p1X + 70, p1Y + 580);
-    ctx.fillStyle = '#cbd5e1';
-    ctx.font = '24px "JetBrains Mono", monospace';
-    ctx.fillText('• Fibre Channel / iSCSI Clustered Arrays', p1X + 70, p1Y + 640);
-    ctx.fillText(`• Discovered VLANs: ${subsegments.map(s => s.vlanId).join(', ')}`, p1X + 70, p1Y + 690);
-    ctx.fillText(`• Segregated Environments: ${environments.join(', ')}`, p1X + 70, p1Y + 740);
-
-    // Box 1.3: HCX Connector Fleet
-    ctx.fillStyle = 'rgba(6, 78, 59, 0.7)';
-    ctx.fillRect(p1X + 40, p1Y + 900, pWidth - 80, 420);
-    ctx.strokeStyle = '#10b981';
-    ctx.strokeRect(p1X + 40, p1Y + 900, pWidth - 80, 420);
-    ctx.fillStyle = '#34d399';
-    ctx.font = 'bold 30px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText('VMware HCX Connector Fleet', p1X + 70, p1Y + 960);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '24px "JetBrains Mono", monospace';
-    ctx.fillText('• HCX Interconnect (IX) Service Engine', p1X + 70, p1Y + 1020);
-    ctx.fillText('• HCX Network Extension (NE) Fleet', p1X + 70, p1Y + 1070);
-    ctx.fillText('• HCX WAN Optimization (WO)', p1X + 70, p1Y + 1120);
-    ctx.fillText('• Mobility Optimized Networking (MON) Active', p1X + 70, p1Y + 1170);
-    ctx.fillText(`• Disaster Recovery Engine: ${drEngine}`, p1X + 70, p1Y + 1220);
-
-    // 4. Panel 2: Hybrid Transit & Security Edge (Center)
+    // 4. Panel 2 (Center Transit & Security)
     const p2X = 1240;
     const p2Y = 330;
     const p2Width = 1100;
@@ -769,51 +1781,13 @@ export const DesignGeneratorPage: React.FC = () => {
 
     ctx.fillStyle = '#38bdf8';
     ctx.font = 'bold 36px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText('02. HYBRID TRANSIT & SECURITY EDGE', p2X + 40, p2Y + 70);
+    ctx.fillText(spec.panel2Header, p2X + 40, p2Y + 70);
 
-    // Box 2.1: Physical Interconnect
-    ctx.fillStyle = 'rgba(30, 41, 59, 0.8)';
-    ctx.fillRect(p2X + 40, p2Y + 120, p2Width - 80, 320);
-    ctx.strokeStyle = '#475569';
-    ctx.strokeRect(p2X + 40, p2Y + 120, p2Width - 80, 320);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 30px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText('Cloud Interconnect & Express Peering', p2X + 70, p2Y + 180);
-    ctx.fillStyle = '#cbd5e1';
-    ctx.font = '24px "JetBrains Mono", monospace';
-    ctx.fillText(`• ${connectivity}`, p2X + 70, p2Y + 240);
-    ctx.fillText('• Dual Redundant 10 Gbps BGP Cross-Connects', p2X + 70, p2Y + 290);
-    ctx.fillText('• Ultra-Low Latency Direct Peering (<2ms)', p2X + 70, p2Y + 340);
+    drawPanelBox(p2X + 40, p2Y + 120, p2Width - 80, 360, spec.panel2Box1.title, spec.panel2Box1.bullets);
+    drawPanelBox(p2X + 40, p2Y + 520, p2Width - 80, 340, spec.panel2Box2.title, spec.panel2Box2.bullets);
+    drawPanelBox(p2X + 40, p2Y + 900, p2Width - 80, 420, spec.panel2Box3.title, spec.panel2Box3.bullets, '#d8b4fe', 'rgba(88, 28, 135, 0.7)', '#a855f7');
 
-    // Box 2.2: Transit Hub Architecture
-    ctx.fillStyle = 'rgba(30, 41, 59, 0.8)';
-    ctx.fillRect(p2X + 40, p2Y + 480, p2Width - 80, 360);
-    ctx.strokeStyle = '#475569';
-    ctx.strokeRect(p2X + 40, p2Y + 480, p2Width - 80, 360);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 30px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText(`Landing Zone: ${landingZone}`, p2X + 70, p2Y + 540);
-    ctx.fillStyle = '#cbd5e1';
-    ctx.font = '24px "JetBrains Mono", monospace';
-    ctx.fillText('• ExpressRoute Gateway / DirectConnect VGW', p2X + 70, p2Y + 600);
-    ctx.fillText('• Transitive Routing & Route Server Peering', p2X + 70, p2Y + 650);
-    ctx.fillText('• FastPath Acceleration Enabled', p2X + 70, p2Y + 700);
-
-    // Box 2.3: Next-Gen Firewall (NVA) & WAF
-    ctx.fillStyle = 'rgba(88, 28, 135, 0.7)';
-    ctx.fillRect(p2X + 40, p2Y + 880, p2Width - 80, 360);
-    ctx.strokeStyle = '#a855f7';
-    ctx.strokeRect(p2X + 40, p2Y + 880, p2Width - 80, 360);
-    ctx.fillStyle = '#d8b4fe';
-    ctx.font = 'bold 30px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText(`NVA Firewall: ${nvaFirewall}`, p2X + 70, p2Y + 940);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '24px "JetBrains Mono", monospace';
-    ctx.fillText(`• Web Application Firewall: ${wafSolution}`, p2X + 70, p2Y + 1000);
-    ctx.fillText('• Deep Packet Inspection (DPI) & IPS/IDS', p2X + 70, p2Y + 1050);
-    ctx.fillText('• Egress Internet Breakout & Zero-Trust Inspection', p2X + 70, p2Y + 1100);
-
-    // 5. Panel 3: Cloud SDDC Core (Right)
+    // 5. Panel 3 (Right Cloud / DR Target)
     const p3X = 2400;
     const p3Y = 330;
     const p3Width = 1360;
@@ -825,63 +1799,24 @@ export const DesignGeneratorPage: React.FC = () => {
 
     ctx.fillStyle = '#10b981';
     ctx.font = 'bold 36px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText(`03. ${cloudPlatform.toUpperCase()} SDDC CORE`, p3X + 40, p3Y + 70);
+    ctx.fillText(spec.panel3Header, p3X + 40, p3Y + 70);
 
-    // Box 3.1: Bare-Metal SDDC Cluster
-    ctx.fillStyle = 'rgba(30, 41, 59, 0.8)';
-    ctx.fillRect(p3X + 40, p3Y + 120, p3Width - 80, 360);
-    ctx.strokeStyle = '#475569';
-    ctx.strokeRect(p3X + 40, p3Y + 120, p3Width - 80, 360);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 30px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText(`Cluster Architecture: ${calculatedCloudNodes} Hosts (${nodeSku})`, p3X + 70, p3Y + 180);
-    ctx.fillStyle = '#cbd5e1';
-    ctx.font = '24px "JetBrains Mono", monospace';
-    ctx.fillText(`• Hardware Generation: ${avsGen} Architecture`, p3X + 70, p3Y + 240);
-    ctx.fillText(`• Management Network CIDR: ${effectiveMgmtCidr}`, p3X + 70, p3Y + 290);
-    ctx.fillText('• vCenter Server + vSAN Enterprise Array', p3X + 70, p3Y + 340);
-    ctx.fillText(`• Sized for ${totalVMCount} Workloads with N+1 High Availability`, p3X + 70, p3Y + 390);
-
-    // Box 3.2: NSX-T Software Defined Networking
-    ctx.fillStyle = 'rgba(30, 41, 59, 0.8)';
-    ctx.fillRect(p3X + 40, p3Y + 520, p3Width - 80, 340);
-    ctx.strokeStyle = '#475569';
-    ctx.strokeRect(p3X + 40, p3Y + 520, p3Width - 80, 340);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 30px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText('NSX-T Multi-Tier Routing & Microsegmentation', p3X + 70, p3Y + 580);
-    ctx.fillStyle = '#cbd5e1';
-    ctx.font = '24px "JetBrains Mono", monospace';
-    ctx.fillText('• Tier-0 Active-Active Gateway with ECMP Peering', p3X + 70, p3Y + 640);
-    ctx.fillText(`• Segregated Tier-1 Gateways (${environments.map(e => `T1-${e}`).join(', ')})`, p3X + 70, p3Y + 690);
-    ctx.fillText('• Distributed Firewall (DFW) Microsegmentation Active', p3X + 70, p3Y + 740);
-
-    // Box 3.3: External Decoupled Storage Tier
-    ctx.fillStyle = 'rgba(12, 74, 110, 0.7)';
-    ctx.fillRect(p3X + 40, p3Y + 880, p3Width - 80, 360);
-    ctx.strokeStyle = '#0284c7';
-    ctx.strokeRect(p3X + 40, p3Y + 880, p3Width - 80, 360);
-    ctx.fillStyle = '#38bdf8';
-    ctx.font = 'bold 30px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText('External Decoupled Storage Tier (NFS Datastores)', p3X + 70, p3Y + 940);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '24px "JetBrains Mono", monospace';
-    ctx.fillText(`• Capacity: ${decoupledStorageTB} TB Offloaded from vSAN Sprawl`, p3X + 70, p3Y + 1000);
-    ctx.fillText(`• Platform: ${externalStorageName}`, p3X + 70, 1050);
-    ctx.fillText('• High-Throughput Dedicated NFS Datastore Mounts', p3X + 70, 1100);
+    drawPanelBox(p3X + 40, p3Y + 120, p3Width - 80, 360, spec.panel3Box1.title, spec.panel3Box1.bullets);
+    drawPanelBox(p3X + 40, p3Y + 520, p3Width - 80, 340, spec.panel3Box2.title, spec.panel3Box2.bullets);
+    drawPanelBox(p3X + 40, p3Y + 900, p3Width - 80, 420, spec.panel3Box3.title, spec.panel3Box3.bullets, '#38bdf8', 'rgba(12, 74, 110, 0.7)', '#0284c7');
 
     // 6. Connectors (Arrow lines across panels)
     ctx.strokeStyle = '#06b6d4';
     ctx.lineWidth = 6;
     ctx.setLineDash([16, 8]);
 
-    // Line 1: On-Prem to Edge
+    // Line 1: Panel 1 to Panel 2
     ctx.beginPath();
-    ctx.moveTo(p1X + pWidth, p1Y + 1040);
+    ctx.moveTo(p1X + p1Width, p1Y + 1040);
     ctx.lineTo(p2X, p2Y + 280);
     ctx.stroke();
 
-    // Line 2: Edge to SDDC
+    // Line 2: Panel 2 to Panel 3
     ctx.beginPath();
     ctx.moveTo(p2X + p2Width, p2Y + 660);
     ctx.lineTo(p3X, p3Y + 660);
@@ -969,9 +1904,48 @@ export const DesignGeneratorPage: React.FC = () => {
     XLSX.writeFile(wb, `${customerName.replace(/\s+/g, '_')}_Cloud_Architecture_BOM.xlsx`);
   };
 
-  // Prompt Construction for Gemini Imagen 3
+  // Prompt Construction for Gemini Imagen 3 - 100% Grounded and Deterministic (Zero Invented Values)
   const buildIsometricDiagramPrompt = () => {
-    return `Dark enterprise blueprint aesthetic 3D isometric architectural diagram of a production hybrid VMware cloud topology for ${customerName}. Deep slate and midnight navy canvas background (#020617) with glowing high-contrast neon cyan, teal, and electric violet network lines, glowing 3D server rack chassis, and hyper-detailed isometric hardware annotations. Left panel displays on-premises enterprise datacenter with ${totalVMCount} VMs, vCenter Server, and VMware HCX interconnect mesh. Center transit panel shows dual redundant 10 Gbps ${connectivity} with ${nvaFirewall} next-gen firewall inspection and ${landingZone}. Right panel shows ${calculatedCloudNodes}x ${nodeSku} bare-metal SDDC nodes in ${cloudPlatform} with vSAN cluster and ${decoupledStorageTB} TB decoupled ${externalStorageName} NFS datastores. Replicated via ${drEngine} with ${drRpoMinutes}-minute RPO. Isometric orthographic 3D projection, photorealistic enterprise blueprint technical drawing, illuminated fiber optic paths, 4K presentation grade clarity.`;
+    const templateNames: Record<ArchitectureTemplateId, string> = {
+      'nutanix-onprem': 'Nutanix On-Premises Private Cloud',
+      'nutanix-to-nc2': 'Nutanix On-Prem to NC2 on Azure',
+      'vmware-to-nc2': 'VMware to Nutanix NC2 Migration',
+      'avs': 'Azure VMware Solution SDDC',
+      'vmc-aws': 'VMware Cloud on AWS',
+      'gcve': 'Google Cloud VMware Engine',
+      'aws-native': 'AWS Native Multi-VPC Architecture',
+      'gcp-native': 'Google Cloud Shared VPC Architecture',
+      'multi-cloud': 'Multi-Cloud Nutanix & Hyperscaler Mesh'
+    };
+
+    const trackTitle = templateNames[activeTemplate] || activeTemplate;
+
+    const envDescriptions = topologyEnvironments.map((env, i) => {
+      const tierLabel = env.tier?.toUpperCase() || (i === 0 ? 'SOURCE' : i === 1 ? 'TRANSIT' : 'TARGET');
+      const vmStr = env.vmCount ? `${env.vmCount} allocated VMs` : `${Math.round(env.totalVcpu / 2.5)} VMs`;
+      const hostStr = env.hostCount > 0 ? `${env.hostCount}x ${env.nodeSku}` : 'Serverless / Managed Cloud Hub';
+      return `[${tierLabel}: "${env.name}" (${env.platform} in ${env.region}) | Hardware: ${hostStr} | Compute: ${env.totalVcpu} vCPU, ${env.totalRamGB} GB RAM, ${env.storageTB} TB Storage | Workload: ${vmStr} | CIDR: ${env.cidrBlock}]`;
+    }).join('; ');
+
+    const linkDescriptions = interconnectLinks.length > 0
+      ? interconnectLinks.map(l => {
+          const src = topologyEnvironments.find(e => e.id === l.sourceId)?.name || 'Source';
+          const tgt = topologyEnvironments.find(e => e.id === l.targetId)?.name || 'Target';
+          const redStr = l.redundant ? 'Dual Redundant Active-Active' : 'Single Uplink';
+          return `[Link: "${src}" -> "${tgt}" via ${l.bandwidthGbps} Gbps ${l.protocol} (${redStr}, ${l.latencyMs || 2}ms latency)]`;
+        }).join('; ')
+      : 'No external cross-environment links established';
+
+    const storageNote = decoupledStorageTB > 0
+      ? `${decoupledStorageTB} TB external decoupled ${externalStorageName} storage datastores`
+      : 'No external decoupled storage configured (100% all-flash local NVMe)';
+
+    const rpoDesc = drRpoMinutes === 0
+      ? '0-minute Synchronous Zero Data Loss RPO'
+      : `${drRpoMinutes}-minute RPO`;
+    const rtoDesc = `${drRtoMinutes}-minute RTO`;
+
+    return `Dark enterprise blueprint aesthetic 3D isometric architectural diagram of a production enterprise multi-cloud topology: "${trackTitle}" for ${customerName} (Lead Architect: ${architectName}, Date: ${projectDate}). Deep slate and midnight navy canvas background (#020617) with glowing neon cyan, teal, emerald, and electric violet network routes, glowing 3D hardware chassis, hyper-detailed isometric platform annotations. Infrastructure Environment Tiers: ${envDescriptions}. Network Interconnect Backbone: ${linkDescriptions}. Perimeter Security & Landing Zone: Physical connectivity via ${connectivity}, Landing Zone pattern "${landingZone}", Next-Gen Firewall inspection by ${nvaFirewall}, Web Application Firewall "${wafSolution}". Decoupled Storage Tier: ${storageNote}. Business Continuity & Resilience: Replicated via ${drEngine} with ${rpoDesc}, ${rtoDesc}, disaster recovery strategy "${drStrategy}". Isometric orthographic 3D projection, photorealistic enterprise blueprint technical drawing, illuminated fiber optic paths, 4K presentation grade clarity.`;
   };
 
 // AI 3D Isometric Generation Trigger
@@ -1637,7 +2611,7 @@ export const DesignGeneratorPage: React.FC = () => {
                   {topologyEnvironments.length > 1 && (
                     <button
                       type="button"
-                      onClick={() => handleRemoveEnvironment(env.id)}
+                      onClick={() => promptRemoveEnvironment(env.id)}
                       className="text-rose-400 hover:text-rose-300 text-[11px] underline cursor-pointer"
                     >
                       Remove
@@ -1910,228 +2884,652 @@ export const DesignGeneratorPage: React.FC = () => {
         </div>
       )}
 
-      {/* 1. Interactive Infrastructure Capture Wizard (4 Columns / Form Sections) */}
-      <div className="p-6 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-6">
-        <h2 className="text-base font-bold text-white flex items-center gap-2 border-b border-slate-800 pb-3">
-          <Server className="w-4 h-4 text-cyan-400" />
-          <span>Step 3: Workload & Sizing Parameters</span>
-        </h2>
+      {/* Guardrail Modal: Template Switch with User Customization Protection */}
+      {showTemplateSwitchModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
+          <div className="relative w-full max-w-lg rounded-2xl bg-slate-900 border border-amber-500/50 shadow-2xl p-6 text-slate-100 space-y-4">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Switch Architecture Track?</h3>
+                <p className="text-xs text-amber-300">Customized environments and interconnect links detected</p>
+              </div>
+            </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 text-xs">
-          {/* Section 1: Customer & Cloud */}
-          <div className="space-y-3">
-            <div className="font-mono text-cyan-400 font-bold uppercase text-[10px]">01. Metadata & Cloud</div>
-            <div className="space-y-1">
-              <label className="text-slate-300">Customer Organization Name</label>
-              <input
-                type="text"
-                value={customerName}
-                onChange={e => setCustomerName(e.target.value)}
-                className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-xs font-semibold"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-slate-300">Lead Principal Architect</label>
-              <input
-                type="text"
-                value={architectName}
-                onChange={e => setArchitectName(e.target.value)}
-                className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-xs"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-slate-300">Target Hyperscaler Platform</label>
-              <select
-                value={cloudPlatform}
-                onChange={e => setCloudPlatform(e.target.value as any)}
-                className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-xs font-bold"
-              >
-                <option value="Azure VMware Solution">Azure VMware Solution (AVS)</option>
-                <option value="VMware Cloud on AWS">VMware Cloud on AWS (VMC)</option>
-                <option value="Google Cloud VMware Engine">Google Cloud VMware Engine (GCVE)</option>
-              </select>
-            </div>
-          </div>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              You have customized node counts, hardware SKUs, or network interconnects in your active topology. Switching to a new architecture track will reset the environment canvas to that track&apos;s baseline topology.
+            </p>
 
-          {/* Section 2: On-Premises Inventory */}
-          <div className="space-y-3">
-            <div className="font-mono text-cyan-400 font-bold uppercase text-[10px]">02. On-Premises SDDC</div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <label className="text-slate-300">vCenter Count</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={vCenterCount}
-                  onChange={e => setVCenterCount(Number(e.target.value))}
-                  className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-xs font-mono"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-slate-300">ESXi Hosts</label>
-                <input
-                  type="number"
-                  min="4"
-                  max="200"
-                  value={esxiHostCount}
-                  onChange={e => setEsxiHostCount(Number(e.target.value))}
-                  className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-xs font-mono"
-                />
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs space-y-1">
+              <div className="text-slate-400 font-mono text-[10px] uppercase">Pending Architecture Track</div>
+              <div className="font-bold text-cyan-300 font-mono text-sm">{pendingTemplateSwitch}</div>
+              <div className="text-[11px] text-slate-400">
+                Current custom topology ({topologyEnvironments.length} nodes, {interconnectLinks.length} links) will be re-initialized.
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <label className="text-slate-300">Cluster Count</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="20"
-                  value={clusterCount}
-                  onChange={e => setClusterCount(Number(e.target.value))}
-                  className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-xs font-mono"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-slate-300">Total VMs</label>
-                <input
-                  type="number"
-                  min="10"
-                  max="5000"
-                  value={totalVMCount}
-                  onChange={e => setTotalVMCount(Number(e.target.value))}
-                  className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-xs font-mono font-bold text-cyan-300"
-                />
-              </div>
-            </div>
-            <div className="space-y-1">
-              <label className="text-slate-300">Environments</label>
-              <div className="flex gap-2 text-[10px]">
-                {['Dev', 'Staging', 'Prod'].map(env => (
-                  <button
-                    key={env}
-                    onClick={() => {
-                      setEnvironments(prev =>
-                        prev.includes(env) ? prev.filter(e => e !== env) : [...prev, env]
-                      );
-                    }}
-                    className={`px-2 py-1 rounded border font-mono cursor-pointer ${
-                      environments.includes(env)
-                        ? 'bg-cyan-950 border-cyan-500 text-cyan-300 font-bold'
-                        : 'bg-slate-950 border-slate-800 text-slate-400'
-                    }`}
-                  >
-                    {env}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
 
-          {/* Section 3: Network & Security */}
-          <div className="space-y-3">
-            <div className="font-mono text-cyan-400 font-bold uppercase text-[10px]">03. Network & Security Edge</div>
-            <div className="space-y-1">
-              <label className="text-slate-300">Physical Connectivity</label>
-              <select
-                value={connectivity}
-                onChange={e => setConnectivity(e.target.value as any)}
-                className="w-full px-2 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-[11px]"
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowTemplateSwitchModal(false);
+                  setPendingTemplateSwitch(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold cursor-pointer transition"
               >
-                <option value="Hybrid (VPN + ExpressRoute / DirectConnect)">Hybrid (VPN + ExpressRoute / DirectConnect)</option>
-                <option value="Direct Circuits with FastPath / Global Reach">Direct Circuits (FastPath / Global Reach)</option>
-                <option value="VPN Only">IPsec VPN Only</option>
-              </select>
-            </div>
-            <div className="space-y-1">
-              <label className="text-slate-300">NVA Firewall Architecture</label>
-              <select
-                value={nvaFirewall}
-                onChange={e => setNvaFirewall(e.target.value as any)}
-                className="w-full px-2 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-[11px]"
+                Keep Current Topology
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (pendingTemplateSwitch) {
+                    applyTemplateSwitch(pendingTemplateSwitch);
+                  }
+                  setShowTemplateSwitchModal(false);
+                  setPendingTemplateSwitch(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold cursor-pointer transition shadow-lg"
               >
-                <option value="Palo Alto Networks VM-Series">Palo Alto Networks VM-Series</option>
-                <option value="Azure Firewall Premium / Native">Azure Firewall Premium / Native</option>
-                <option value="Fortinet FortiGate-VM">Fortinet FortiGate-VM</option>
-                <option value="Check Point CloudGuard">Check Point CloudGuard</option>
-                <option value="Cisco Secure Firewall">Cisco Secure Firewall</option>
-              </select>
-            </div>
-            <div className="space-y-1">
-              <label className="text-slate-300">WAF Solution</label>
-              <select
-                value={wafSolution}
-                onChange={e => setWafSolution(e.target.value as any)}
-                className="w-full px-2 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-[11px]"
-              >
-                <option value="Azure WAF on Application Gateway">Azure WAF on App Gateway</option>
-                <option value="Cloudflare Magic Transit">Cloudflare Magic Transit</option>
-                <option value="AWS WAF">AWS WAF</option>
-                <option value="F5 Distributed Cloud WAF">F5 Distributed Cloud WAF</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Section 4: Hyperscaler SDDC Settings */}
-          <div className="space-y-3">
-            <div className="font-mono text-cyan-400 font-bold uppercase text-[10px]">04. SDDC SKU & IPAM</div>
-            <div className="space-y-1">
-              <label className="text-slate-300">Bare-Metal Node SKU</label>
-              <select
-                value={nodeSku}
-                onChange={e => setNodeSku(e.target.value)}
-                className="w-full px-2 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-[11px] font-mono font-bold text-cyan-300"
-              >
-                {cloudPlatform === 'Azure VMware Solution' && (
-                  <>
-                    <option value="AV36P">AV36P (36 cores, 576GB RAM)</option>
-                    <option value="AV64">AV64 (64 cores, 1024GB RAM)</option>
-                    <option value="AV48">AV48 (48 cores, 768GB RAM)</option>
-                    <option value="AV52">AV52 (52 cores, 1536GB RAM)</option>
-                    <option value="AV36">AV36 (36 cores, 576GB RAM)</option>
-                  </>
-                )}
-                {cloudPlatform === 'VMware Cloud on AWS' && (
-                  <>
-                    <option value="i4i.metal">i4i.metal (64 cores, 1024GB RAM)</option>
-                    <option value="i3en.metal">i3en.metal (96 cores, 768GB RAM)</option>
-                    <option value="m7i.metal-24xl">m7i.metal-24xl (96 cores, 384GB RAM)</option>
-                  </>
-                )}
-                {cloudPlatform === 'Google Cloud VMware Engine' && (
-                  <>
-                    <option value="ve1-standard-72">ve1-standard-72 (72 cores, 768GB RAM)</option>
-                    <option value="ve2-standard-128">ve2-standard-128 (128 cores, 2048GB RAM)</option>
-                  </>
-                )}
-              </select>
-            </div>
-            <div className="space-y-1">
-              <div className="flex justify-between">
-                <label className="text-slate-300">Management IP CIDR</label>
-                <span className="text-[10px] text-cyan-400 font-mono">/22 Required</span>
-              </div>
-              <input
-                type="text"
-                placeholder="10.240.0.0/22"
-                value={mgmtCidrInput}
-                onChange={e => setMgmtCidrInput(e.target.value)}
-                className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-xs font-mono"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-slate-300">Decoupled Storage (TB)</label>
-              <input
-                type="number"
-                min="0"
-                max="800"
-                value={decoupledStorageTB}
-                onChange={e => setDecoupledStorageTB(Number(e.target.value))}
-                className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-slate-200 text-xs font-mono font-bold text-cyan-300"
-              />
+                Switch & Reset to Track Baseline
+              </button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* Guardrail Modal: Environment Deletion & Cascade Link Protection */}
+      {showDeleteEnvModal && pendingDeleteEnvId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
+          <div className="relative w-full max-w-lg rounded-2xl bg-slate-900 border border-rose-500/50 shadow-2xl p-6 text-slate-100 space-y-4">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="p-2 rounded-xl bg-rose-500/10 text-rose-400 border border-rose-500/30">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Remove Environment & Attached Links?</h3>
+                <p className="text-xs text-rose-300">Active interconnect links will be severed</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Environment <strong>&quot;{topologyEnvironments.find(e => e.id === pendingDeleteEnvId)?.name}&quot;</strong> is currently connected to other environments. Removing it will automatically sever all attached interconnect links:
+            </p>
+
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs space-y-2 max-h-36 overflow-y-auto font-mono">
+              {interconnectLinks
+                .filter(l => l.sourceId === pendingDeleteEnvId || l.targetId === pendingDeleteEnvId)
+                .map(l => (
+                  <div key={l.id} className="text-[11px] text-rose-300 flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                    <span>
+                      {topologyEnvironments.find(e => e.id === l.sourceId)?.name} ➔ {topologyEnvironments.find(e => e.id === l.targetId)?.name} ({l.protocol})
+                    </span>
+                  </div>
+                ))}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDeleteEnvModal(false);
+                  setPendingDeleteEnvId(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold cursor-pointer transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (pendingDeleteEnvId) {
+                    handleRemoveEnvironment(pendingDeleteEnvId);
+                  }
+                  setShowDeleteEnvModal(false);
+                  setPendingDeleteEnvId(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white text-xs font-bold cursor-pointer transition shadow-lg"
+              >
+                Confirm & Remove Environment
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Step 3: Tabbed Sizing & Configuration Inspector (Topology, Networking, DR) */}
+      <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-5 shadow-2xl">
+        {/* Step 3 Header & Tab Switcher */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono text-cyan-400 font-bold uppercase">Step 3: Configuration Inspector</span>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/30">
+                Single Source of Truth
+              </span>
+            </div>
+            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+              <span>Workload Sizing, Network Fabric & Disaster Recovery Inspector</span>
+            </h2>
+          </div>
+
+          {/* Three Inspector Tabs */}
+          <div className="flex items-center p-1 bg-slate-950 border border-slate-800 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setStep3ActiveTab('topology')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                step3ActiveTab === 'topology'
+                  ? 'bg-cyan-500 text-slate-950 font-bold shadow'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Server className="w-3.5 h-3.5" />
+              <span>Topology & Sizing</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setStep3ActiveTab('networking')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                step3ActiveTab === 'networking'
+                  ? 'bg-cyan-500 text-slate-950 font-bold shadow'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Network className="w-3.5 h-3.5" />
+              <span>Network & Subnets</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setStep3ActiveTab('dr')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                step3ActiveTab === 'dr'
+                  ? 'bg-cyan-500 text-slate-950 font-bold shadow'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <ShieldAlert className="w-3.5 h-3.5" />
+              <span>DR & Resilience</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Live Rollup Capacity Metrics Banner */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 font-mono text-xs">
+          <div>
+            <span className="text-[10px] text-slate-500 uppercase block">Environments</span>
+            <span className="text-sm font-bold text-cyan-400">{topologyEnvironments.length} Tiers</span>
+          </div>
+          <div>
+            <span className="text-[10px] text-slate-500 uppercase block">Total Hosts</span>
+            <span className="text-sm font-bold text-white">{topologyMetrics.totalHosts} Nodes</span>
+          </div>
+          <div>
+            <span className="text-[10px] text-slate-500 uppercase block">Total Workload</span>
+            <span className="text-sm font-bold text-emerald-400">{topologyMetrics.totalVMs} VMs</span>
+          </div>
+          <div>
+            <span className="text-[10px] text-slate-500 uppercase block">Aggregate vCPU</span>
+            <span className="text-sm font-bold text-white">{topologyMetrics.totalVcpu} Cores</span>
+          </div>
+          <div>
+            <span className="text-[10px] text-slate-500 uppercase block">Aggregate Memory</span>
+            <span className="text-sm font-bold text-white">{topologyMetrics.totalRamGB} GiB</span>
+          </div>
+          <div>
+            <span className="text-[10px] text-slate-500 uppercase block">Usable Storage</span>
+            <span className="text-sm font-bold text-indigo-400">{topologyMetrics.totalStorageTB} TiB</span>
+          </div>
+        </div>
+
+        {/* TAB 1: TOPOLOGY & SIZING INSPECTOR */}
+        {step3ActiveTab === 'topology' && (
+          <div className="space-y-4">
+            {/* Metadata Bar */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-xl bg-slate-950/60 border border-slate-800 text-xs">
+              <div className="space-y-1">
+                <label className="text-slate-400 font-medium text-[11px]">Customer Organization</label>
+                <input
+                  type="text"
+                  value={customerName}
+                  onChange={e => setCustomerName(e.target.value)}
+                  className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 font-semibold focus:border-cyan-500 focus:outline-none"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-slate-400 font-medium text-[11px]">Lead Enterprise Architect</label>
+                <input
+                  type="text"
+                  value={architectName}
+                  onChange={e => setArchitectName(e.target.value)}
+                  className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 focus:border-cyan-500 focus:outline-none"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-slate-400 font-medium text-[11px]">Project Timestamp</label>
+                <input
+                  type="date"
+                  value={projectDate}
+                  onChange={e => setProjectDate(e.target.value)}
+                  className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 font-mono focus:border-cyan-500 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Environment Cards Grid */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs text-slate-400">
+                <span className="font-semibold text-slate-300">Configured Environment Tiers & Sizing:</span>
+                <span className="font-mono text-[11px]">Editing specs directly updates the authoritative model</span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {topologyEnvironments.map(env => {
+                  const skuList = getAvailableSkusForPlatform(env.platform);
+                  return (
+                    <div
+                      key={env.id}
+                      className="p-4 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 transition flex flex-col justify-between space-y-3"
+                    >
+                      {/* Environment Card Header */}
+                      <div className="flex items-start justify-between gap-2 border-b border-slate-800/80 pb-2">
+                        <div className="space-y-0.5">
+                          <input
+                            type="text"
+                            value={env.name}
+                            onChange={e => handleUpdateNodeSpec(env.id, { name: e.target.value })}
+                            className="font-bold text-white text-xs bg-transparent border-b border-transparent hover:border-slate-700 focus:border-cyan-500 focus:outline-none w-full"
+                          />
+                          <div className="flex items-center gap-1.5 text-[10px] font-mono">
+                            <span className="text-cyan-400">{env.platform}</span>
+                            <span className="text-slate-600">·</span>
+                            <span className="text-slate-400 capitalize">{env.tier}</span>
+                          </div>
+                        </div>
+
+                        {topologyEnvironments.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => promptRemoveEnvironment(env.id)}
+                            className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 cursor-pointer transition"
+                            title="Remove environment"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Sizing Controls */}
+                      <div className="space-y-2.5 text-xs">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <label className="text-[10px] text-slate-400 uppercase font-mono block">Host Count</label>
+                            <input
+                              type="number"
+                              min="1"
+                              max="128"
+                              value={env.hostCount}
+                              onChange={e => handleUpdateNodeSpec(env.id, { hostCount: Math.max(1, Number(e.target.value)) })}
+                              className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded text-white font-mono font-bold focus:border-cyan-500 focus:outline-none"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[10px] text-slate-400 uppercase font-mono block">Workload VMs</label>
+                            <input
+                              type="number"
+                              min="0"
+                              max="10000"
+                              value={env.vmCount ?? Math.round(env.totalVcpu / 2.5)}
+                              onChange={e => handleUpdateNodeSpec(env.id, { vmCount: Math.max(0, Number(e.target.value)) })}
+                              className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded text-emerald-400 font-mono font-bold focus:border-cyan-500 focus:outline-none"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[10px] text-slate-400 uppercase font-mono block">Hardware Node SKU</label>
+                          <select
+                            value={env.nodeSku}
+                            onChange={e => handleUpdateNodeSpec(env.id, { nodeSku: e.target.value })}
+                            className="w-full px-2 py-1.5 bg-slate-900 border border-slate-800 rounded text-cyan-300 text-[11px] font-mono focus:border-cyan-500 focus:outline-none"
+                          >
+                            {skuList.map(sku => (
+                              <option key={sku} value={sku}>
+                                {sku}
+                              </option>
+                            ))}
+                            {!skuList.includes(env.nodeSku) && (
+                              <option value={env.nodeSku}>{env.nodeSku}</option>
+                            )}
+                          </select>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <label className="text-[10px] text-slate-400 uppercase font-mono block">Storage (TB)</label>
+                            <input
+                              type="number"
+                              min="1"
+                              max="2000"
+                              value={env.storageTB}
+                              onChange={e => handleUpdateNodeSpec(env.id, { storageTB: Math.max(1, Number(e.target.value)) })}
+                              className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded text-slate-200 font-mono focus:border-cyan-500 focus:outline-none"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[10px] text-slate-400 uppercase font-mono block">Subnet CIDR</label>
+                            <input
+                              type="text"
+                              value={env.cidrBlock}
+                              onChange={e => handleUpdateNodeSpec(env.id, { cidrBlock: e.target.value })}
+                              className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded text-slate-200 font-mono text-[11px] focus:border-cyan-500 focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Capacity Rollup Footer */}
+                      <div className="pt-2 border-t border-slate-900 text-[10px] font-mono text-slate-400 flex items-center justify-between">
+                        <span>Compute: {env.totalVcpu} vCPUs · {env.totalRamGB} GB</span>
+                        <span className="text-slate-500">{env.region}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 2: NETWORK & SUBNETS INSPECTOR */}
+        {step3ActiveTab === 'networking' && (
+          <div className="space-y-5">
+            {/* Global Network & Security Architecture Controls */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 p-4 rounded-xl bg-slate-950/60 border border-slate-800 text-xs">
+              <div className="space-y-1">
+                <label className="text-slate-300 font-medium text-[11px]">Physical Interconnect Carrier</label>
+                <select
+                  value={connectivity}
+                  onChange={e => setConnectivity(e.target.value as any)}
+                  className="w-full px-2.5 py-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs focus:border-cyan-500 focus:outline-none"
+                >
+                  <option value="Hybrid (VPN + ExpressRoute / DirectConnect)">Hybrid (VPN + Direct Circuit)</option>
+                  <option value="Direct Circuits with FastPath / Global Reach">Direct Circuits (FastPath / Global Reach)</option>
+                  <option value="VPN Only">IPsec VPN Only</option>
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-slate-300 font-medium text-[11px]">Landing Zone Architecture</label>
+                <select
+                  value={landingZone}
+                  onChange={e => setLandingZone(e.target.value as any)}
+                  className="w-full px-2.5 py-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs focus:border-cyan-500 focus:outline-none"
+                >
+                  <option value="Azure Virtual WAN Hub-and-Spoke">Azure Virtual WAN Hub-and-Spoke</option>
+                  <option value="Traditional Hub-and-Spoke with ARS">Traditional Hub-and-Spoke with Route Server</option>
+                  <option value="AWS Transit Gateway Multi-VPC">AWS Transit Gateway Multi-VPC</option>
+                  <option value="GCP Shared VPC Host Project">GCP Shared VPC Host Project</option>
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-slate-300 font-medium text-[11px]">NVA Firewall Architecture</label>
+                <select
+                  value={nvaFirewall}
+                  onChange={e => setNvaFirewall(e.target.value as any)}
+                  className="w-full px-2.5 py-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs focus:border-cyan-500 focus:outline-none"
+                >
+                  <option value="Palo Alto Networks VM-Series">Palo Alto Networks VM-Series</option>
+                  <option value="Azure Firewall Premium / Native">Azure Firewall Premium / Native</option>
+                  <option value="Fortinet FortiGate-VM">Fortinet FortiGate-VM</option>
+                  <option value="Check Point CloudGuard">Check Point CloudGuard</option>
+                  <option value="Cisco Secure Firewall">Cisco Secure Firewall</option>
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-slate-300 font-medium text-[11px]">Web Application Firewall (WAF)</label>
+                <select
+                  value={wafSolution}
+                  onChange={e => setWafSolution(e.target.value as any)}
+                  className="w-full px-2.5 py-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs focus:border-cyan-500 focus:outline-none"
+                >
+                  <option value="Azure WAF on Application Gateway">Azure WAF on App Gateway</option>
+                  <option value="Cloudflare Magic Transit">Cloudflare Magic Transit</option>
+                  <option value="AWS WAF">AWS WAF</option>
+                  <option value="F5 Distributed Cloud WAF">F5 Distributed Cloud WAF</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Interconnect Links Table */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-slate-300 flex items-center gap-2">
+                  <Network className="w-4 h-4 text-cyan-400" />
+                  <span>Cross-Environment Interconnect Links ({interconnectLinks.length})</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (topologyEnvironments.length >= 2) {
+                      setEditingLinkId(null);
+                      setLinkModalSourceId(topologyEnvironments[0]?.id || '');
+                      setLinkModalTargetId(topologyEnvironments[1]?.id || '');
+                      setShowLinkModal(true);
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow transition"
+                >
+                  <Link2 className="w-3.5 h-3.5" />
+                  <span>Establish New Link</span>
+                </button>
+              </div>
+
+              <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950">
+                <table className="w-full text-left text-xs font-mono">
+                  <thead>
+                    <tr className="border-b border-slate-800 bg-slate-900/60 text-slate-400 text-[10px] uppercase">
+                      <th className="py-2.5 px-4">Source Tier</th>
+                      <th className="py-2.5 px-4">Target Tier</th>
+                      <th className="py-2.5 px-4">Protocol</th>
+                      <th className="py-2.5 px-4">Bandwidth</th>
+                      <th className="py-2.5 px-4">Redundancy</th>
+                      <th className="py-2.5 px-4">Latency</th>
+                      <th className="py-2.5 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60 text-slate-200">
+                    {interconnectLinks.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="py-6 text-center text-slate-500 font-sans text-xs">
+                          No cross-environment interconnect links configured. Click &quot;Establish New Link&quot; or connect nodes in the Step 4 canvas.
+                        </td>
+                      </tr>
+                    ) : (
+                      interconnectLinks.map(link => {
+                        const src = topologyEnvironments.find(e => e.id === link.sourceId);
+                        const tgt = topologyEnvironments.find(e => e.id === link.targetId);
+                        return (
+                          <tr key={link.id} className="hover:bg-slate-900/40 transition">
+                            <td className="py-2.5 px-4 font-bold text-cyan-300">
+                              {src?.name || link.sourceId}
+                            </td>
+                            <td className="py-2.5 px-4 font-bold text-emerald-300">
+                              {tgt?.name || link.targetId}
+                            </td>
+                            <td className="py-2.5 px-4 text-slate-300">{link.protocol}</td>
+                            <td className="py-2.5 px-4 text-cyan-400 font-bold">{link.bandwidthGbps} Gbps</td>
+                            <td className="py-2.5 px-4">
+                              {link.redundant ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-emerald-950/80 border border-emerald-500/30 text-emerald-300 font-sans">
+                                  <ShieldCheck className="w-3 h-3" />
+                                  <span>Dual Circuit</span>
+                                </span>
+                              ) : (
+                                <span className="text-slate-500 text-[11px] font-sans">Single Circuit</span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-4 text-slate-400">{link.latencyMs || 2} ms</td>
+                            <td className="py-2.5 px-4 text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditLink(link)}
+                                  className="text-cyan-400 hover:text-cyan-300 cursor-pointer font-sans text-xs"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteLink(link.id)}
+                                  className="text-rose-400 hover:text-rose-300 cursor-pointer font-sans text-xs"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 3: DR & RESILIENCE INSPECTOR */}
+        {step3ActiveTab === 'dr' && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {/* DR Engine */}
+              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <label className="text-slate-300 font-medium text-xs flex items-center justify-between">
+                  <span>Replication & DR Engine</span>
+                  <span className="text-[10px] font-mono text-cyan-400">Validated</span>
+                </label>
+                <select
+                  value={drEngine}
+                  onChange={e => setDrEngine(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs font-semibold focus:border-cyan-500 focus:outline-none"
+                >
+                  <option value="Nutanix Protection Domains (NearSync)">Nutanix Protection Domains (NearSync)</option>
+                  <option value="Nutanix Move / Prism Pairing">Nutanix Move / Prism Pairing</option>
+                  <option value="Nutanix Move Cross-Hypervisor">Nutanix Move Cross-Hypervisor</option>
+                  <option value="VMware SRM + vSphere Replication">VMware SRM + vSphere Replication</option>
+                  <option value="VMware HCX Bulk / Replication">VMware HCX Bulk / Replication</option>
+                  <option value="VMware HCX / Google Cloud Interconnect">VMware HCX / Google Cloud Interconnect</option>
+                  <option value="AWS Direct Connect + AWS DMS">AWS Direct Connect + AWS DMS</option>
+                  <option value="Google Cloud Partner Interconnect">Google Cloud Partner Interconnect</option>
+                  <option value="Multi-Cloud Cross-Replication">Multi-Cloud Cross-Replication</option>
+                </select>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Controls continuous data protection, storage block sync, and failover orchestration between environments.
+                </p>
+              </div>
+
+              {/* RPO & RTO SLA */}
+              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <label className="text-slate-300 font-medium text-xs flex items-center justify-between">
+                  <span>Target RPO & RTO SLAs</span>
+                  {drRpoMinutes === 0 ? (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40">
+                      0-min Sync (Zero Data Loss)
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-mono text-cyan-400">{drRpoMinutes}-min RPO</span>
+                  )}
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-mono text-slate-400 uppercase block">RPO (Minutes)</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="1440"
+                      value={drRpoMinutes}
+                      onChange={e => setDrRpoMinutes(Math.max(0, Number(e.target.value)))}
+                      className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-cyan-300 font-mono font-bold text-xs focus:border-cyan-500 focus:outline-none"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-mono text-slate-400 uppercase block">RTO (Minutes)</span>
+                    <input
+                      type="number"
+                      min="5"
+                      max="1440"
+                      value={drRtoMinutes}
+                      onChange={e => setDrRtoMinutes(Math.max(5, Number(e.target.value)))}
+                      className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-slate-200 font-mono font-bold text-xs focus:border-cyan-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Setting RPO to 0 designates synchronous zero-data-loss replication for critical database tiers.
+                </p>
+              </div>
+
+              {/* DR Topology Strategy */}
+              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <label className="text-slate-300 font-medium text-xs">Failover Orchestration Strategy</label>
+                <select
+                  value={drStrategy}
+                  onChange={e => setDrStrategy(e.target.value as any)}
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-200 text-xs font-semibold focus:border-cyan-500 focus:outline-none"
+                >
+                  <option value="Pilot Light (3-Node Minimum)">Pilot Light (3-Node Minimum)</option>
+                  <option value="Warm Standby (Full Cluster)">Warm Standby (Full Cluster)</option>
+                  <option value="Cold Storage / On-Demand">Cold Storage / On-Demand</option>
+                  <option value="Hot Standby (Full Cluster)">Hot Standby (Active-Standby Mirror)</option>
+                </select>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Defines cloud standby capacity, standby power state, and pre-warmed host footprint at target site.
+                </p>
+              </div>
+            </div>
+
+            {/* Decoupled Storage Tier Configuration */}
+            <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <HardDrive className="w-4 h-4 text-cyan-400" />
+                  <span className="font-semibold text-white text-xs">External Decoupled Storage Datastores</span>
+                </div>
+                <span className="text-[10px] font-mono text-slate-400">Offloads storage sprawl from Bare-Metal hosts</span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                <div className="space-y-1">
+                  <label className="text-slate-400 text-[11px]">Decoupled Storage Allocation (TB)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="1000"
+                    value={decoupledStorageTB}
+                    onChange={e => setDecoupledStorageTB(Math.max(0, Number(e.target.value)))}
+                    className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-cyan-300 font-mono font-bold focus:border-cyan-500 focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-slate-400 text-[11px]">Storage Provider / Array Technology</label>
+                  <input
+                    type="text"
+                    readOnly
+                    value={externalStorageName}
+                    className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-cyan-300 font-mono text-xs cursor-default select-all"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Step 4: Dual-Mode Topology Viewport (Interactive Multi-Tier Canvas + Static 4K Viewport) */}
@@ -2470,7 +3868,7 @@ export const DesignGeneratorPage: React.FC = () => {
                               {topologyEnvironments.length > 1 && (
                                 <button
                                   type="button"
-                                  onClick={() => handleRemoveEnvironment(env.id)}
+                                  onClick={() => promptRemoveEnvironment(env.id)}
                                   className="px-2 py-1 rounded hover:bg-rose-950 text-slate-500 hover:text-rose-400 cursor-pointer transition"
                                   title="Remove environment"
                                 >
@@ -2757,123 +4155,135 @@ export const DesignGeneratorPage: React.FC = () => {
                   </div>
                 )}
               </div>
-            ) : (
+            ) : (() => {
               /* ========================================================================= */
-              /* MODE 2: Preserved Static 4K Vector Blueprint Viewport                     */
+              /* MODE 2: Track-Aware High-Fidelity 4K Vector Blueprint Viewport            */
               /* ========================================================================= */
-              <svg viewBox="0 0 1280 720" className="w-full h-full">
-                {/* Grid Background */}
-                <defs>
-                  <pattern id="diagGrid" width="40" height="40" patternUnits="userSpaceOnUse">
-                    <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" strokeWidth="0.5" />
-                  </pattern>
-                </defs>
-                <rect width="1280" height="720" fill="url(#diagGrid)" />
+              const vectorSpec = buildTrackVisualSpec(activeTemplate, {
+                customerName,
+                sourceEnv: topologyMetrics.primarySource,
+                transitEnv: topologyMetrics.primaryTransit,
+                targetEnv: topologyMetrics.primaryTarget,
+                totalVMs: topologyMetrics.totalVMs,
+                interconnectLinks,
+                connectivity,
+                landingZone,
+                nvaFirewall,
+                wafSolution,
+                drEngine,
+                drRpoMinutes,
+                drRtoMinutes,
+                drStrategy,
+                externalStorageName,
+                decoupledStorageTB
+              });
 
-                {/* Header Box */}
-                <rect x="30" y="25" width="1220" height="65" rx="8" fill="#0f172a" stroke="#06b6d4" strokeWidth="1.5" />
-                <text x="50" y="52" fill="#ffffff" fontSize="16" fontWeight="bold" fontFamily="Plus Jakarta Sans">
-                  {customerName} — {cloudPlatform} Architecture Blueprint
-                </text>
-                <text x="50" y="74" fill="#94a3b8" fontSize="11" fontFamily="JetBrains Mono">
-                  ARCHITECT: {architectName} · DATE: {projectDate} · NODE SKU: {nodeSku} ({calculatedCloudNodes} NODES) · MGMT CIDR: {effectiveMgmtCidr}
-                </text>
+              return (
+                <svg viewBox="0 0 1280 720" className="w-full h-full select-none">
+                  {/* Grid Background */}
+                  <defs>
+                    <pattern id="diagGrid" width="40" height="40" patternUnits="userSpaceOnUse">
+                      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" strokeWidth="0.5" />
+                    </pattern>
+                  </defs>
+                  <rect width="1280" height="720" fill="url(#diagGrid)" />
 
-                {/* Panel 1: On-Premises Datacenter (Left) */}
-                <rect x="30" y="110" width="370" height="570" rx="10" fill="#0b1120" stroke="#334155" strokeWidth="1" />
-                <text x="50" y="140" fill="#06b6d4" fontSize="13" fontWeight="bold" fontFamily="Plus Jakarta Sans">
-                  01. ON-PREMISES DATACENTER
-                </text>
+                  {/* Header Box */}
+                  <rect x="30" y="25" width="1220" height="65" rx="8" fill="#0f172a" stroke="#06b6d4" strokeWidth="1.5" />
+                  <text x="50" y="52" fill="#ffffff" fontSize="15" fontWeight="bold" fontFamily="Plus Jakarta Sans">
+                    {vectorSpec.title.toUpperCase()}
+                  </text>
+                  <text x="50" y="74" fill="#94a3b8" fontSize="11" fontFamily="JetBrains Mono">
+                    ARCHITECT: {architectName} · DATE: {projectDate} · TRACK: {activeTemplate.toUpperCase()} · DR: {drEngine} ({drRpoMinutes === 0 ? '0-min Sync' : `${drRpoMinutes}-min RPO`})
+                  </text>
 
-                {/* On-Prem Box 1: vSphere Compute */}
-                <rect x="50" y="160" width="330" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-                <text x="65" y="185" fill="#ffffff" fontSize="12" fontWeight="bold">VMware vCenter Server (VCSA)</text>
-                <text x="65" y="210" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {vCenterCount} vCenter Instance(s)</text>
-                <text x="65" y="230" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {clusterCount} Clusters · {esxiHostCount} ESXi Hosts</text>
-                <text x="65" y="250" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {totalVMCount} Virtual Machines</text>
-                <text x="65" y="270" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {vdsCount} Virtual Distributed Switches</text>
+                  {/* Panel 1 (Left) */}
+                  <rect x="30" y="110" width="370" height="570" rx="10" fill="#0b1120" stroke="#334155" strokeWidth="1" />
+                  <text x="50" y="140" fill="#06b6d4" fontSize="12" fontWeight="bold" fontFamily="Plus Jakarta Sans">
+                    {vectorSpec.panel1Header}
+                  </text>
 
-                {/* On-Prem Box 2: SAN Storage */}
-                <rect x="50" y="325" width="330" height="130" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-                <text x="65" y="350" fill="#ffffff" fontSize="12" fontWeight="bold">SAN / NAS Storage Tier</text>
-                <text x="65" y="375" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Fibre Channel / iSCSI Clustered Arrays</text>
-                <text x="65" y="395" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Stretched VLANs: {subsegments.map(s => s.vlanId).join(', ')}</text>
-                <text x="65" y="415" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Environments: {environments.join(', ')}</text>
+                  {/* Panel 1 Box 1 */}
+                  <rect x="50" y="160" width="330" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
+                  <text x="65" y="185" fill="#ffffff" fontSize="11" fontWeight="bold">{vectorSpec.panel1Box1.title}</text>
+                  {vectorSpec.panel1Box1.bullets.map((b, i) => (
+                    <text key={i} x="65" y={210 + i * 20} fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
+                  ))}
 
-                {/* On-Prem Box 3: HCX Connector */}
-                <rect x="50" y="470" width="330" height="180" rx="6" fill="#064e3b" stroke="#10b981" strokeWidth="1" />
-                <text x="65" y="495" fill="#34d399" fontSize="12" fontWeight="bold">VMware HCX Connector Fleet</text>
-                <text x="65" y="520" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• HCX Interconnect (IX) Service Engine</text>
-                <text x="65" y="540" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• HCX Network Extension (NE) L2 Stretch</text>
-                <text x="65" y="560" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• HCX WAN Optimization (WO)</text>
-                <text x="65" y="580" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• Mobility Optimized Networking (MON)</text>
+                  {/* Panel 1 Box 2 */}
+                  <rect x="50" y="325" width="330" height="130" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
+                  <text x="65" y="350" fill="#ffffff" fontSize="11" fontWeight="bold">{vectorSpec.panel1Box2.title}</text>
+                  {vectorSpec.panel1Box2.bullets.map((b, i) => (
+                    <text key={i} x="65" y={375 + i * 20} fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
+                  ))}
 
-                {/* Panel 2: Hybrid Transit & Edge Security (Center) */}
-                <rect x="430" y="110" width="370" height="570" rx="10" fill="#0b1120" stroke="#334155" strokeWidth="1" />
-                <text x="450" y="140" fill="#38bdf8" fontSize="13" fontWeight="bold" fontFamily="Plus Jakarta Sans">
-                  02. HYBRID TRANSIT & EDGE
-                </text>
+                  {/* Panel 1 Box 3 */}
+                  <rect x="50" y="470" width="330" height="180" rx="6" fill="#064e3b" stroke="#10b981" strokeWidth="1" />
+                  <text x="65" y="495" fill="#34d399" fontSize="11" fontWeight="bold">{vectorSpec.panel1Box3.title}</text>
+                  {vectorSpec.panel1Box3.bullets.map((b, i) => (
+                    <text key={i} x="65" y={520 + i * 20} fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
+                  ))}
 
-                {/* Center Box 1: Interconnect */}
-                <rect x="450" y="160" width="330" height="130" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-                <text x="465" y="185" fill="#ffffff" fontSize="12" fontWeight="bold">Cloud Interconnect & Peering</text>
-                <text x="465" y="210" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {connectivity}</text>
-                <text x="465" y="230" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Dual Redundant 10G Circuits</text>
-                <text x="465" y="250" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• BGP Dynamic Route Peering</text>
+                  {/* Panel 2 (Center) */}
+                  <rect x="430" y="110" width="370" height="570" rx="10" fill="#0b1120" stroke="#334155" strokeWidth="1" />
+                  <text x="450" y="140" fill="#38bdf8" fontSize="12" fontWeight="bold" fontFamily="Plus Jakarta Sans">
+                    {vectorSpec.panel2Header}
+                  </text>
 
-                {/* Center Box 2: Landing Zone */}
-                <rect x="450" y="305" width="330" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-                <text x="465" y="330" fill="#ffffff" fontSize="12" fontWeight="bold">Landing Zone Architecture</text>
-                <text x="465" y="355" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• {landingZone}</text>
-                <text x="465" y="375" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• FastPath Gateway Acceleration</text>
-                <text x="465" y="395" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Route Server Peering Active</text>
+                  {/* Panel 2 Box 1 */}
+                  <rect x="450" y="160" width="330" height="130" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
+                  <text x="465" y="185" fill="#ffffff" fontSize="11" fontWeight="bold">{vectorSpec.panel2Box1.title}</text>
+                  {vectorSpec.panel2Box1.bullets.map((b, i) => (
+                    <text key={i} x="465" y={210 + i * 20} fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
+                  ))}
 
-                {/* Center Box 3: NVA Firewall & WAF */}
-                <rect x="450" y="470" width="330" height="180" rx="6" fill="#581c87" stroke="#a855f7" strokeWidth="1" />
-                <text x="465" y="495" fill="#d8b4fe" fontSize="12" fontWeight="bold">NVA Firewall: {nvaFirewall.split(' ')[0]}</text>
-                <text x="465" y="520" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• {nvaFirewall}</text>
-                <text x="465" y="540" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• WAF: {wafSolution}</text>
-                <text x="465" y="560" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• Zero-Trust Inspection & IDS/IPS</text>
-                <text x="465" y="580" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• Egress Cloud Breakout Routing</text>
+                  {/* Panel 2 Box 2 */}
+                  <rect x="450" y="305" width="330" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
+                  <text x="465" y="330" fill="#ffffff" fontSize="11" fontWeight="bold">{vectorSpec.panel2Box1.title ? vectorSpec.panel2Box2.title : ''}</text>
+                  {vectorSpec.panel2Box2.bullets.map((b, i) => (
+                    <text key={i} x="465" y={355 + i * 20} fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
+                  ))}
 
-                {/* Panel 3: Cloud SDDC Core (Right) */}
-                <rect x="830" y="110" width="420" height="570" rx="10" fill="#0b1120" stroke="#334155" strokeWidth="1" />
-                <text x="850" y="140" fill="#10b981" fontSize="13" fontWeight="bold" fontFamily="Plus Jakarta Sans">
-                  03. {cloudPlatform.toUpperCase()} SDDC CORE
-                </text>
+                  {/* Panel 2 Box 3 */}
+                  <rect x="450" y="470" width="330" height="180" rx="6" fill="#581c87" stroke="#a855f7" strokeWidth="1" />
+                  <text x="465" y="495" fill="#d8b4fe" fontSize="11" fontWeight="bold">{vectorSpec.panel2Box3.title}</text>
+                  {vectorSpec.panel2Box3.bullets.map((b, i) => (
+                    <text key={i} x="465" y={520 + i * 20} fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
+                  ))}
 
-                {/* SDDC Box 1: Bare-Metal Hosts */}
-                <rect x="850" y="160" width="380" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-                <text x="865" y="185" fill="#ffffff" fontSize="12" fontWeight="bold">
-                  {calculatedCloudNodes} Hosts ({nodeSku}) — {avsGen}
-                </text>
-                <text x="865" y="210" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Management CIDR: {effectiveMgmtCidr}</text>
-                <text x="865" y="230" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• VMware ESXi Hypervisor + vSAN</text>
-                <text x="865" y="250" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Sized for {totalVMCount} VMs (N+1 HA Buffer)</text>
+                  {/* Panel 3 (Right) */}
+                  <rect x="830" y="110" width="420" height="570" rx="10" fill="#0b1120" stroke="#334155" strokeWidth="1" />
+                  <text x="850" y="140" fill="#10b981" fontSize="12" fontWeight="bold" fontFamily="Plus Jakarta Sans">
+                    {vectorSpec.panel3Header}
+                  </text>
 
-                {/* SDDC Box 2: NSX-T Core */}
-                <rect x="850" y="325" width="380" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
-                <text x="865" y="350" fill="#ffffff" fontSize="12" fontWeight="bold">NSX-T SDN & Tier-0/Tier-1 Routing</text>
-                <text x="865" y="375" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Tier-0 Active-Active Gateway (ECMP)</text>
-                <text x="865" y="395" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Segregated Tier-1s: {environments.map(e => `T1-${e}`).join(', ')}</text>
-                <text x="865" y="415" fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">• Distributed Firewall (DFW) Microseg</text>
+                  {/* Panel 3 Box 1 */}
+                  <rect x="850" y="160" width="380" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
+                  <text x="865" y="185" fill="#ffffff" fontSize="11" fontWeight="bold">{vectorSpec.panel3Box1.title}</text>
+                  {vectorSpec.panel3Box1.bullets.map((b, i) => (
+                    <text key={i} x="865" y={210 + i * 20} fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
+                  ))}
 
-                {/* SDDC Box 3: Decoupled Storage */}
-                <rect x="850" y="490" width="380" height="160" rx="6" fill="#0c4a6e" stroke="#0284c7" strokeWidth="1" />
-                <text x="865" y="515" fill="#38bdf8" fontSize="12" fontWeight="bold">
-                  External Decoupled Storage Tier ({decoupledStorageTB} TB)
-                </text>
-                <text x="865" y="540" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">
-                  • {externalStorageName}
-                </text>
-                <text x="865" y="560" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• High-IOPS NFS Datastore Mounts</text>
-                <text x="865" y="580" fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">• Offloads Storage Sprawl from Bare-Metal Hosts</text>
+                  {/* Panel 3 Box 2 */}
+                  <rect x="850" y="325" width="380" height="150" rx="6" fill="#1e293b" stroke="#475569" strokeWidth="1" />
+                  <text x="865" y="350" fill="#ffffff" fontSize="11" fontWeight="bold">{vectorSpec.panel3Box2.title}</text>
+                  {vectorSpec.panel3Box2.bullets.map((b, i) => (
+                    <text key={i} x="865" y={375 + i * 20} fill="#cbd5e1" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
+                  ))}
 
-                {/* Interconnect Connecting Arrows */}
-                <path d="M 380 540 L 450 220" stroke="#06b6d4" strokeWidth="2.5" strokeDasharray="6,4" fill="none" />
-                <path d="M 780 380 L 850 380" stroke="#06b6d4" strokeWidth="2.5" strokeDasharray="6,4" fill="none" />
-              </svg>
-            )}
+                  {/* Panel 3 Box 3 */}
+                  <rect x="850" y="490" width="380" height="160" rx="6" fill="#0c4a6e" stroke="#0284c7" strokeWidth="1" />
+                  <text x="865" y="515" fill="#38bdf8" fontSize="11" fontWeight="bold">{vectorSpec.panel3Box3.title}</text>
+                  {vectorSpec.panel3Box3.bullets.map((b, i) => (
+                    <text key={i} x="865" y={540 + i * 20} fill="#ffffff" fontSize="10" fontFamily="JetBrains Mono">{b}</text>
+                  ))}
+
+                  {/* Interconnect Connecting Arrows */}
+                  <path d="M 380 540 L 450 220" stroke="#06b6d4" strokeWidth="2.5" strokeDasharray="6,4" fill="none" />
+                  <path d="M 780 380 L 850 380" stroke="#06b6d4" strokeWidth="2.5" strokeDasharray="6,4" fill="none" />
+                </svg>
+              );
+            })()}
           </div>
         </div>
       </div>

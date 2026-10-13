@@ -1,209 +1,164 @@
-# Milestone 2 — Interactive Multi-Cloud Architecture Canvas & Data Integrity Plan (Revised)
-
-## Executive Summary
-Milestone 2 evolves the **Enterprise Multi-Cloud & Nutanix Architecture Blueprint Generator** into an **Interactive Multi-Cloud Architecture Canvas** with multi-tier grid dragging, interactive click-to-connect interconnect drawing, expanded 9-track architecture templates, and bulletproof environment validation.
-
-This revised plan strictly addresses the three requested corrections:
-1. **Audit Before Fixing**: The implementation agent must inspect actual repository code and report line-by-line evidence before treating any defect as confirmed. If repository access is unavailable, findings must be marked unverified. No invented audit results. Only the smallest necessary fixes are permitted.
-2. **Resolve Legacy-Sync Triggers**: Legacy `localStorage` synchronization is strictly permitted **only** on explicit **Save Blueprint** and **Export Blueprint / BOM** actions. 4K PNG/JPEG exports and AI 3D Blueprint generation must remain functional without unintended storage writes. No writes on page load or tab switches. Auditing Save and Export individually; requiring explicit user approval before adding any additional action as a legacy-sync trigger.
-3. **Three Distinct, Non-Overlapping Phases**:
-   - **Phase 1**: Real-repo code audit and data-integrity fixes. Run automated tests and report verified results before touching canvas code.
-   - **Phase 2**: Interactive multi-cloud canvas and validation improvements (Add Environment form validation, Step 1 track expansion, interactive canvas nodes and click-to-connect drawing, explicit sync).
-   - **Phase 3**: Verification, regression testing, and sign-off report. Verify that existing SVG, 4K Canvas, AI 3D modal, BOM export, authentication, storage, and protected files (`vite.config.ts`, `package.json`, etc.) remain intact. No code pushes or deployments without explicit approval.
+# Enterprise Multi-Cloud & Nutanix Architecture Blueprint Generator
+## Revised Comprehensive Implementation Plan: End-to-End Workflow Integration
 
 ---
 
-## 1. Mandatory Audit-Before-Fixing Protocol & Verified Evidence
+### Executive Summary & Objective
+This revised plan directly resolves the five architectural requirements established by the user review:
+1. **Single Source of Truth**: Eliminates conflicting/drifting state by establishing `topologyEnvironments` as the sole canonical authority for all node compute, storage, SKUs, CIDRs, and workloads, while deriving global aggregates dynamically.
+2. **Track-Aware Rendering**: Distinct, platform-accurate visual models for **all nine architecture tracks** across the interactive canvas, static vector blueprint, and 4K export (not generic categories).
+3. **Preservation of User Customizations**: Guards template switching with explicit confirmation modals that detect user modifications, and protects environment deletion with cascade link warnings.
+4. **Accurate & Deterministic AI Generation**: Generates the 3D architecture blueprint prompt purely from verified configuration across all 4 steps (all tiers, SKUs, CIDRs, interconnect pipes, and DR SLAs) with strict prohibition against invented or placeholder values.
+5. **Comprehensive Verification**: End-to-end automated test suite verifying all 4 workflow transitions, node coordinate preservation, 4K canvas export across all 9 tracks, AI prompt determinism, and existing storage data-integrity boundaries.
 
-> **AGENT DIRECTIVE**: The implementation agent must independently inspect actual source code and produce line-by-line evidence before implementing any fix. If repository access is unavailable or files cannot be read, findings must be marked **UNVERIFIED**. No assumptions or synthetic results are permitted. Only apply the smallest safe change necessary.
+---
 
-### Finding 1: RVTools VM Count Recalculation (CONFIRMED IN CODE)
-- **File**: `src/types/multiCloudBlueprint.ts`
-- **Lines**: 647, 661, 675
-- **Verified Code Evidence**:
+### 1. Single Source of Truth (SSOT) Architecture
+
+#### 1.1 Root Problem in Current Code
+Currently, `DesignGeneratorPage.tsx` maintains disjoint state variables:
+- `vCenterCount`, `esxiHostCount`, `clusterCount`, `vdsCount`, `totalVMCount`, `nodeSku`, `mgmtCidrInput`, `decoupledStorageTB` exist as independent React states.
+- Simultaneously, `topologyEnvironments: EnvironmentNode[]` maintains its own `hostCount`, `nodeSku`, `totalVcpu`, `totalRamGB`, `storageTB`, `cidrBlock`, and `vmCount`.
+- Editing a value in Step 2 does not update Step 3, and changing a field in Step 3 does not update `topologyEnvironments`. This causes data conflicts, out-of-sync canvas cards, and split-brain exports.
+
+#### 1.2 Canonical Unified State Model
+- **`topologyEnvironments: EnvironmentNode[]`** is established as the **sole authoritative data store** for all infrastructure components across all tiers:
+  - Source Datacenter / Clusters
+  - Transit & Security Hubs / VPCs / VNets
+  - Target Cloud SDDC / NC2 / Native VPCs / Secondary Clusters
+- **Derived Global Metrics** (`useMemo`):
   ```ts
-  totalVMs: Math.round((env0?.totalVcpu || 760) / 2.5)
+  const topologyMetrics = useMemo(() => {
+    const totalHosts = topologyEnvironments.reduce((acc, e) => acc + (e.hostCount || 0), 0);
+    const totalVMs = topologyEnvironments.reduce((acc, e) => acc + (e.vmCount || 0), 0);
+    const totalVcpu = topologyEnvironments.reduce((acc, e) => acc + (e.totalVcpu || 0), 0);
+    const totalRamGB = topologyEnvironments.reduce((acc, e) => acc + (e.totalRamGB || 0), 0);
+    const totalStorageTB = topologyEnvironments.reduce((acc, e) => acc + (e.storageTB || 0), 0);
+    const primaryTarget = topologyEnvironments.find(e => e.tier === 'target') || topologyEnvironments[1] || topologyEnvironments[0];
+    const primarySource = topologyEnvironments.find(e => e.tier === 'source') || topologyEnvironments[0];
+    return { totalHosts, totalVMs, totalVcpu, totalRamGB, totalStorageTB, primaryTarget, primarySource };
+  }, [topologyEnvironments]);
   ```
-- **Analysis**:
-  In `writebackLegacyStorage()`, `totalVMs` is recalculated using an assumed 2.5 vCPU-per-VM divisor. When an RVTools inventory with non-standard ratios (e.g., 500 VMs with 800 vCPUs) is imported, saving overwrites `totalVMs` to 320 instead of preserving 500.
-- **Smallest Necessary Fix**:
-  1. Add optional `vmCount?: number` to `EnvironmentNode`.
-  2. In `hydrateLegacyStorageState()`, populate `vmCount: resolvedVMs`.
-  3. In `writebackLegacyStorage()`, prioritize `env0?.vmCount ?? rawBlueprintState?.totalVMs ?? rawSizingExport?.vms ?? rawDrExport?.vms` before falling back to any ratio estimate.
-
-### Finding 2: Destructive Legacy Storage Writeback & Unknown Field Loss (CONFIRMED IN CODE)
-- **Files**: `src/types/multiCloudBlueprint.ts` (lines 641–681) & `src/pages/tools/DesignGeneratorPage.tsx` (line 235)
-- **Verified Code Evidence**:
-  - In `DesignGeneratorPage.tsx` L235: `handlePersistLegacyState` passes `importedLegacyContext: {}`.
-  - In `multiCloudBlueprint.ts` L641–681: `writebackLegacyStorage()` constructs brand-new objects and serializes them without re-reading existing `localStorage` contents. Any additional or custom attributes present in `zaboraa_4k_blueprint_state`, `zaboraa_dr_export`, or `zaboraa_sizing_export` (e.g. `vlans`, `limitingDriver`, `storagePolicy`, custom metadata) are erased on writeback.
-- **Smallest Necessary Fix**:
-  1. Maintain `importedLegacyContext` in component state populated during initial hydration.
-  2. In `writebackLegacyStorage()`, read and parse existing `localStorage` keys directly and perform a non-destructive object merge (`{ ...existingLegacyObject, ...updatedFields }`) that guarantees unknown legacy fields are fully preserved.
-
-### Finding 3: Zero-Value & Synchronous SLA Overwrite (CONFIRMED IN CODE)
-- **File**: `src/types/multiCloudBlueprint.ts` (lines 520–527, 570–576)
-- **Verified Code Evidence**:
-  - `decoupledStorageTB: legacySizing.storageTB || 120` — falsy check replaces valid `0` with `120`.
-  - `rpoMin: legacyDr.rpoMin || 15` — falsy check replaces synchronous DR (`0` min) with `15`.
-- **Smallest Necessary Fix**:
-  - Replace falsy checks with explicit numeric checks: `(typeof val === 'number' && !isNaN(val) && val >= 0) ? val : fallback`.
-
-### Finding 4: Automated Test Runner Gap (CONFIRMED IN CODE)
-- **Verified Evidence**: `package.json` contains no unit test script (only `tsc --noEmit` via `lint`).
-- **Smallest Necessary Fix**:
-  - Implement a dedicated test script `scripts/verify-data-integrity.ts` executed via `npx tsx scripts/verify-data-integrity.ts`.
-  - Do NOT modify `package.json`.
+- **Step 3 Two-Way Synchronization**:
+  - In Step 3's **Tab 1 (Topology & Sizing)**, editing any environment directly calls:
+    `handleUpdateNodeSpec(envId, { hostCount, nodeSku, totalVcpu, totalRamGB, storageTB, vmCount })`
+  - In Step 3's **Tab 2 (Network & Subnets)**, editing CIDR blocks updates the environment's `cidrBlock` or `vlanSubnets` in `topologyEnvironments`. Target management CIDR updates `primaryTarget.cidrBlock`.
+  - Global security settings (`connectivity`, `nvaFirewall`, `wafSolution`) and resilience parameters (`drEngine`, `drRpoMinutes`, `drRtoMinutes`, `drStrategy`) are bound to global architectural metadata, automatically reflected in the interconnect matrix and resilience models.
+  - Zero redundant shadow states; any change made in Step 3 is immediately visible in Step 2 and Step 4 without page reload or desynchronization.
 
 ---
 
-## 2. Strict Legacy Storage Synchronization Boundaries
+### 2. Track-Aware Rendering for All Nine Architecture Tracks
 
-Per explicit user requirement:
-1. **Permitted Legacy-Sync Triggers (Strictly Limited To Two Actions)**:
-   - User explicitly clicks **Save Blueprint** (`handleSaveBlueprintState`)
-   - User explicitly clicks **Export Blueprint (JSON)** or **Export Bill of Materials (Excel)**
-2. **Prohibited From Triggering Legacy Sync**:
-   - Initial page mount / hydration (`useEffect`)
-   - Tab switching or design track selection
-   - Interactive canvas node dragging, panning, or zooming
-   - Interconnect link creation, editing, or deletion
-   - Add Environment or Edit Environment form typing and submission
-   - **Export 4K PNG / JPEG**: Canvas capture must download high-resolution graphics with zero `localStorage` writes
-   - **Generate 3D Architecture Blueprint**: AI 3D modal must generate and display visualizations with zero `localStorage` writes
-3. **Strict Approval Protocol for Additional Triggers**:
-   - Save and Export actions must be audited individually.
-   - Any addition of a new legacy storage sync trigger requires explicit written authorization from the user. No automatic or silent expansion is permitted.
+Mode 2 (Static Vector Blueprint) and `draw4KCanvas` (4K Export) will feature dedicated, platform-authentic rendering engines tailored specifically to each of the 9 tracks:
 
----
+| # | Track ID | Track Name | Source Tier Representation | Transit & Security Tier | Target Tier Representation |
+| :- | :--- | :--- | :--- | :--- | :--- |
+| **1** | `nutanix-onprem` | Nutanix On-Premises Private Cloud | Nutanix AOS Cluster (NX / Cisco / HPE nodes), Prism Central, AHV Hypervisor | L2/L3 ToR Leaf-Spine Switch Mesh, Flow Virtual Networking, Flow Microsegmentation | Secondary Nutanix AHV Cluster, Nutanix Files & Objects, Nutanix Mine Backup |
+| **2** | `nutanix-to-nc2` | Nutanix On-Prem to NC2 on Azure | On-Prem Nutanix Cluster (AOS/AHV) managed by Prism Central | Azure ExpressRoute FastPath (10G), Azure Virtual WAN Hub, Flow Security Gateway | Nutanix Cloud Clusters (NC2) on Azure BareMetal (AN36P), Prism Central Federation, Azure Blob/NetApp |
+| **3** | `vmware-to-nc2` | VMware to Nutanix NC2 Migration | Legacy VMware vSphere Datacenter (vCenter, ESXi, SAN/NAS LUNs) | Dedicated Migration Transport, Nutanix Move Appliance Pipe, Flow Virtual Networking | Nutanix Cloud Clusters (NC2), AHV Clustered Compute, Nutanix Volumes Storage |
+| **4** | `avs` | Azure VMware Solution SDDC | VMware vSphere SDDC (vCenter, ESXi, SAN, HCX Connector) | Azure ExpressRoute FastPath, Azure vWAN Hub, NVA Firewall (Palo Alto/Fortinet/Azure FW), Azure WAF | Azure VMware Solution (AV36P/AV64), NSX-T Tier-0/1 ECMP, Azure NetApp Files (ANF) Datastores |
+| **5** | `vmc-aws` | VMware Cloud on AWS | On-Prem VMware Datacenter (vCenter, ESXi, HCX Fleet) | AWS Direct Connect Gateway (10G), AWS Transit Gateway, Connected VPC ENI Interconnect | VMware Cloud on AWS (i4i.metal/i3en.metal), NSX-T SDDC, Amazon FSx for NetApp ONTAP |
+| **6** | `gcve` | Google Cloud VMware Engine | On-Prem VMware SDDC (vCenter, ESXi, HCX Connector) | Google Cloud Dedicated Interconnect (10G), Cloud Router, Cloud Armor WAF | Google Cloud VMware Engine (ve1/ve2-standard), NSX-T Tier-0, Google Cloud NetApp Volumes |
+| **7** | `aws-native` | AWS Native Multi-VPC Architecture | On-Prem Enterprise Datacenter / Branch Offices | AWS Direct Connect / Site-to-Site VPN, AWS Transit Gateway, AWS Network Firewall | Production AWS VPC (EKS/EC2 across 3 AZs), Shared Services VPC, S3 Glacier DR Replica |
+| **8** | `gcp-native` | Google Cloud Shared VPC Architecture | Corporate Datacenter / Edge Locations | Google Cloud Partner Interconnect, Cloud Interconnect VLAN Attachment, Cloud IDS/IPS | GCP Shared VPC (Service Projects, Google Kubernetes Engine GKE, Cloud SQL HA, Cloud Storage Multi-Region) |
+| **9** | `multi-cloud` | Multi-Cloud Nutanix & Hyperscaler Mesh | On-Prem Nutanix AOS/AHV Datacenter with Prism Element | Multi-Cloud Interconnect Backbone (Equinix / Megaport / Cloud Router mesh), Cloudflare Magic Transit WAF | Distributed Multi-Cloud Targets (Azure NC2 BareMetal + AWS Native VPC + S3/Blob Unified Storage Fabric) |
 
-## 3. Scope of Proposed Code Modifications & Protected Files
-
-### Files Proposed for Modification
-1. `src/types/multiCloudBlueprint.ts`:
-   - Add `vmCount?: number`, `tier?: 'source' | 'transit' | 'target' | 'edge'`, `x?: number`, `y?: number` to `EnvironmentNode`.
-   - Define `InterconnectLink` interface (`id`, `sourceId`, `targetId`, `protocol`, `bandwidthGbps`, `status`, `notes`).
-   - Implement non-destructive `hydrateLegacyStorageState()` and `writebackLegacyStorage()` with direct `localStorage` deep-merge and zero-value guards.
-2. `scripts/verify-data-integrity.ts` *(New verification script)*:
-   - Self-contained test runner verifying VM count preservation, zero-value retention, unknown legacy key preservation, malformed JSON handling, and repeated load-save-load idempotence.
-3. `src/pages/tools/DesignGeneratorPage.tsx`:
-   - **Step 1 Architecture Tracks**: Expand to 9 selectable tracks with category filter tabs (`All Tracks`, `Nutanix & Hybrid`, `Hyperscaler SDDC`, `Cloud Native`, `Migration`), vendor badge accents, and initial node pre-population.
-   - **Step 2 Custom Environment Validation**: Trimmed name requirement, case-insensitive duplicate check, CIDR notation validation, positive integer checks, inline error hints, and disabled button state until valid.
-   - **Step 4 Interactive Multi-Cloud Canvas**: Multi-tier grid auto-alignment, interactive node dragging, interactive click-to-connect interconnect drawing and protocol modal, node spec inspector drawer, and preserved static 4K vector view.
-   - **Sync Boundary Wiring**: Wire `writebackLegacyStorage()` strictly and exclusively to explicit **Save Blueprint** and **Export Blueprint / BOM** actions.
-
-### Protected Files Confirmed Untouched
-The following production files, server endpoints, and services will **NEVER** be modified:
-- `package.json`
-- `vite.config.ts`
-- `vercel.json`
-- `api/generate-blueprint.js`
-- `src/services/firebaseAuth.ts`
-- `src/services/storageService.ts`
-- `src/context/AuthContext.tsx`
-- 4K Canvas rendering pipeline (`draw4KCanvas`)
-- BOM Excel generation logic (`handleExportBOMExcel`)
+Each track will render genuine vendor nomenclature, hypervisor types, cluster management tiers, interconnect protocols, and storage fabrics rather than falling back to generic VMware abstractions.
 
 ---
 
-## 4. Three-Phase Implementation Workflow
+### 3. Preserving User Customizations & Safe Workflow Transitions
 
-```
-[PLAN REVIEW & USER APPROVAL]
-       │
-       ▼ (Upon User Sign-Off)
-[PHASE 1: Real-Repo Code Audit & Data-Integrity Fixes]
-       │  • Implement minimal writeback and hydration fixes
-       │  • Create scripts/verify-data-integrity.ts
-       │  • Run: npx tsx scripts/verify-data-integrity.ts
-       │  • Report actual pass/fail test output BEFORE touching canvas
-       ▼
-[PHASE 2: Interactive Multi-Cloud Canvas & Validation Improvements]
-       │  • Step 1 Track Expansion (9 tracks, category tabs, vendor styling)
-       │  • Add Environment Form Validation (name uniqueness, CIDR, integer hosts)
-       │  • Multi-Tier Grid Auto-Alignment & Interactive Node Dragging
-       │  • Interactive Click-to-Connect Drawing & Link Modal
-       │  • Explicit Sync Wiring (Save Blueprint & Export Blueprint/BOM ONLY)
-       ▼
-[PHASE 3: Verification, Regression Testing, & Sign-Off Report]
-       │  • Run full regression test suite (data integrity, build, lint)
-       │  • Verify 4K Canvas, SVG export, AI 3D modal, BOM, Auth, Storage intact
-       │  • Verify protected files unchanged
-       │  • Present exact code diffs and test logs
-       │  • STOP and wait for User Approval (NO push, NO deploy)
-```
+#### 3.1 Template Switching Guardrail
+- When the user selects a different track in Step 1:
+  - System checks `hasUserCustomizations`:
+    - Have environment node counts, SKUs, names, or CIDRs been altered from template defaults?
+    - Have custom environments been added or deleted?
+    - Have custom interconnect links been established?
+  - If customizations exist, the app intercepts the switch and displays a **Template Switch Confirmation Modal**:
+    - *"You have customized the current architecture topology (X environments, Y connections). Switching to [New Track] will reconfigure your canvas to the template default. Would you like to proceed or keep your customized architecture?"*
+    - **Options**: `Keep My Customizations` (Cancel) or `Apply New Template Defaults` (Proceed).
 
-### Detailed Phase Breakdown
+#### 3.2 Environment Deletion & Cascade Protection
+- In Step 2 and Step 4, when the user clicks to delete an environment node:
+  - System checks for connected links in `interconnectLinks`.
+  - If links exist, displays a **Delete Confirmation Modal**:
+    - *"Removing [Environment Name] will sever X active interconnect link(s): [Link 1, Link 2]. Are you sure you want to delete this environment tier?"*
+  - On confirmation, cascade deletion removes the node AND its associated `interconnectLinks` cleanly, preventing orphaned links or invalid Bézier curves.
+  - Prevents accidental deletion of the last remaining environment tier (minimum of 1 environment always enforced).
 
-### Phase 1: Real-Repo Code Audit & Data-Integrity Fixes
-- **Goal**: Resolve all confirmed data-integrity defects with the smallest possible change footprint and prove correctness with automated tests before touching any UI or canvas code.
-- **Step 1.1**: Update `src/types/multiCloudBlueprint.ts`:
-  - Preserve `resolvedVMs` in `EnvironmentNode.vmCount`.
-  - In `writebackLegacyStorage()`, read existing `localStorage` keys directly and merge non-destructively to retain all unknown legacy fields and custom metadata.
-  - Guard numeric zero values (`storageTB: 0`, `decoupledStorageTB: 0`, `rpoMin: 0`).
-- **Step 1.2**: Implement `scripts/verify-data-integrity.ts` with 5 automated test cases:
-  - **Test 1 (VM Count)**: Asserts that an RVTools inventory with non-standard ratio (e.g. 500 VMs, 800 vCPUs) retains `500` across repeated hydration and writeback cycles without recalculation.
-  - **Test 2 (Zero Values)**: Asserts that valid zeros (`storageTB: 0`, `rpoMin: 0`) are preserved and not replaced by default numbers.
-  - **Test 3 (Unknown Fields)**: Asserts that custom/extra legacy properties (e.g. `vlans`, `limitingDriver`, `customTags`) in legacy keys survive repeated writeback untouched.
-  - **Test 4 (Malformed Data)**: Asserts that malformed or partial JSON in `localStorage` is handled gracefully without crashing.
-  - **Test 5 (Conflict Resolution)**: Asserts that precedence order (RVTools > Sizing > DR) is strictly respected during multi-source hydration.
-- **Step 1.3**: Execute `npx tsx scripts/verify-data-integrity.ts` and document actual terminal output.
-- **Checkpoint**: Present test results to the user. Do not proceed to Phase 2 until Phase 1 tests pass cleanly.
+#### 3.3 Coordinate Preservation During Step 3 Adjustments
+- Node coordinates `(x, y)` on the interactive canvas are strictly preserved when the user edits parameters, node counts, SKUs, or CIDRs in Step 3.
+- Canvas layout state maintains positions independently of sizing metrics, ensuring the architect's custom spatial arrangement is never rearranged when tweaking capacity.
 
-### Phase 2: Interactive Multi-Cloud Canvas & Validation Improvements
-- **Goal**: Implement Step 1 track expansion, robust environment validation, multi-tier interactive canvas, and strict explicit synchronization.
-- **Step 2.1: Step 1 Architecture Track Expansion**:
-  - Expand from 5 to 9 enterprise architecture tracks:
-    1. Nutanix On-Premises (AOS / AHV) — *Primary Datacenter*
-    2. Nutanix Cloud Clusters on Azure (NC2) — *Hybrid Cloud*
-    3. VMware to NC2 Migration Assessment — *Migration*
-    4. Azure VMware Solution (AVS SDDC) — *Hyperscaler SDDC*
-    5. VMware Cloud on AWS (VMC SDDC) — *Hyperscaler SDDC*
-    6. Google Cloud VMware Engine (GCVE SDDC) — *Hyperscaler SDDC*
-    7. AWS Native Enterprise VPC Hub — *Cloud Native*
-    8. Google Cloud Native Hub — *Cloud Native*
-    9. Multi-Cloud Enterprise Mesh — *Hybrid Cloud / Mesh*
-  - Category filter tabs: `All Tracks`, `Nutanix & Hybrid`, `Hyperscaler SDDC`, `Cloud Native`, `Migration`.
-  - Vendor-aligned accent borders and badges: Emerald (Nutanix), Sky (Azure), Amber (AWS), Blue (GCP), Indigo (Mesh).
-  - Pre-populate initial production and transit interconnect nodes upon track selection.
-- **Step 2.2: Add Environment Form Validation Improvements**:
-  - Name: Required, trimmed, case-insensitive duplicate check against existing environments.
-  - CIDR: Valid IPv4 CIDR notation (`^([0-9]{1,3}\.){3}[0-9]{1,3}\/([0-9]|[1-2][0-9]|3[0-2])$`).
-  - Hosts: Required positive integer (or >= 0 for cloud hubs).
-  - Storage TB: Required positive number.
-  - Clear inline error messages and disabled button state until all rules are satisfied.
-  - Initialize new environments with `connectedEnvironmentIds: []` as unlinked zones.
-- **Step 2.3: Interactive Multi-Tier Canvas**:
-  - Arrange environments into auto-aligned functional tiers: Tier 1 (Source / On-Prem), Tier 2 (Transit Hubs / Interconnects), Tier 3 (Cloud SDDC / Native / DR).
-  - Smooth interactive mouse dragging with coordinate boundary limits.
-  - Click-to-connect interconnect drawing between nodes with link configuration modal:
-    - Protocols: ExpressRoute FastPath, AWS Direct Connect, Google Cloud Interconnect, IPsec VPN, VMware HCX L2 Extension, Nutanix Move, Nutanix Protection Domain / Leap.
-    - Bandwidth: 1 Gbps, 10 Gbps, 100 Gbps, redundancy mode, notes.
-    - Interactive bezier connection lines with animated directional flows.
-    - Click existing link to edit properties or delete.
-  - Node spec inspector drawer displaying compute, storage, networking, and connected links with inline editing.
-  - Dual-mode viewport toggle: **Interactive Multi-Tier Canvas** vs. **Static 4K Vector Blueprint Viewport**.
-- **Step 2.4: Explicit Legacy-Sync Boundaries**:
-  - Wire `writebackLegacyStorage()` strictly to:
-    - User clicks **Save Blueprint** (`handleSaveBlueprintState`)
-    - User clicks **Export Blueprint (JSON)** or **Export Bill of Materials (Excel)**
-  - Ensure Export 4K PNG/JPEG and Generate 3D Blueprint operate with zero `localStorage` writes.
-  - Ensure page load, tab switches, and canvas dragging perform zero `localStorage` writes.
+---
 
-### Phase 3: Verification, Regression Testing, & Sign-Off Report
-- **Goal**: Full verification of all subsystems, non-regression confirmation, and presentation of exact diffs.
-- **Step 3.1**: Run regression test suite: `npx tsx scripts/verify-data-integrity.ts`.
-- **Step 3.2**: Run TypeScript type check: `npm run lint` (`tsc --noEmit`).
-- **Step 3.3**: Run Vite build: `npm run build`.
-- **Step 3.4**: Non-Regression Verification:
-  - Verify static SVG export produces valid scalable vector markup.
-  - Verify 4K Canvas generator (`draw4KCanvas`) produces high-resolution 3840x2160 PNG/JPEG without errors.
-  - Verify AI 3D Isometric Blueprint modal opens, submits prompts to server, and renders generated images.
-  - Verify BOM Excel calculation and export functions without regression.
-  - Verify Firebase Authentication and Firestore storage services are intact.
-  - Verify `package.json`, `vite.config.ts`, and `vercel.json` have zero diffs against initial repository state.
-- **Step 3.5: Final Review & Sign-Off Presentation**:
-  - Present exact file diffs for all modified files.
-  - Present actual test logs from the data integrity runner, compiler, and build system.
-  - Confirm protected file status.
-  - **STOP and wait for user review and approval**.
-  - No code pushes, deployments, or production changes will occur without separate user approval.
+### 4. Accurate, Deterministic AI Prompt Synthesis (Zero Invented Values)
+
+The AI prompt generation engine (`buildIsometricDiagramPrompt`) will be completely rebuilt to enforce 100% technical accuracy with zero hallucinations or filler text:
+
+#### 4.1 Strict Grounding Rules
+- **Header**: Customer Organization (`customerName`), Lead Architect (`architectName`), Active Track ID and Name (`activeTemplate`).
+- **Environment Tiers**: Every tier present in `topologyEnvironments` is listed with its:
+  - Tier Classification (`Source`, `Transit`, `Target`, `Edge`)
+  - Platform & Hypervisor (e.g., Nutanix AOS 6.5 / AHV, Azure VMware Solution ESXi 8.0, AWS Native EKS/VPC)
+  - Region & Location
+  - Node Count and Exact Hardware SKU (e.g., `4x Nutanix NX-8170-G9`, `6x Azure AV36P Bare-Metal`)
+  - Workload Capacity: Total vCPUs, Total RAM GiB, Usable Storage TB, Allocated VM Count
+  - Exact Subnet & Management CIDR Block (e.g., `10.240.0.0/22`)
+- **Interconnect Mesh**: Every link in `interconnectLinks` is explicitly transcribed:
+  - Source Node Name -> Target Node Name
+  - Protocol (e.g. `10 Gbps Azure ExpressRoute FastPath`, `Nutanix Move Migration Stream`, `AWS Direct Connect 10G`, `VMware HCX L2 Network Extension`)
+  - Redundancy mode (`Dual Redundant Active-Active` or `Single Uplink`)
+- **Perimeter & Security Edge**:
+  - Next-Gen Firewall (NVA): Exact selected model (`Palo Alto Networks VM-Series`, `Azure Firewall Premium`, `Fortinet FortiGate-VM`, etc.)
+  - Perimeter WAF: Exact selected solution (`Azure WAF on App Gateway`, `Cloudflare Magic Transit`, `AWS WAF`, etc.)
+  - Physical Transit Type (`Hybrid Direct Circuits`, `IPsec VPN Mesh`, `Dedicated Interconnect`)
+- **Disaster Recovery & SLA Specification**:
+  - Replication Engine: Exact engine (`Nutanix Protection Domains / NearSync`, `Nutanix Move`, `VMware SRM`, `VMware HCX`, `AWS DMS`)
+  - Target RPO: Exact RPO minutes (e.g. `0-minute Synchronous Zero Data Loss` if 0, or `${drRpoMinutes}-minute RPO`)
+  - Target RTO: Exact RTO minutes (e.g. `${drRtoMinutes}-minute RTO`)
+  - DR Topology & Failover Orchestration: (`Warm Standby with Automated Orchestrated Runbook`)
+- **Zero Hallucination Rule**: If a field is not configured (e.g., decoupled storage = 0 TB), the prompt outputs `No external decoupled storage configured (100% all-flash local NVMe)`, never inventing phantom SAN/NAS arrays.
+
+---
+
+### 5. Implementation Sequence & File Modifications
+
+#### 5.1 `src/types/multiCloudBlueprint.ts`
+- Enhance `ARCHITECTURE_TEMPLATES` with complete track-specific defaults for all 9 tracks (including dedicated Nutanix NX SKUs, NC2 BareMetal SKUs, AWS metal SKUs, and GCP ve SKUs).
+- Add track-aware helper functions to format platform components, hypervisors, and storage types.
+
+#### 5.2 `src/pages/tools/DesignGeneratorPage.tsx`
+- **Single Source of Truth**: Replace independent SDDC inputs with `useMemo` aggregates and direct two-way bindings into `topologyEnvironments`.
+- **Step 1 Template Switching**: Add `hasUserCustomizations` detection and confirmation modal.
+- **Step 2 & 4 Deletion**: Add cascade deletion confirmation modal for environments with active interconnect links.
+- **Step 3 Tabbed Inspector**:
+  - Tab 1: Topology & Sizing (per-environment live node counts, hardware SKUs, compute, storage, and VM workload allocation).
+  - Tab 2: Network & Subnets (management CIDR, environment CIDRs, interconnect links table, NVA firewall, WAF, VLAN subsegments).
+  - Tab 3: DR & Resilience (track-aware DR replication engine, RPO slider, RTO slider, failover mode).
+- **Step 4 Track-Aware Visual Engines**:
+  - Mode 1 Canvas: auto-syncs cards with live node metrics and platform badges while preserving `(x, y)` coordinates.
+  - Mode 2 Vector Blueprint: 9 dedicated layout branches rendering platform-specific components for all 9 tracks.
+  - `draw4KCanvas`: 9 dedicated canvas drawing routines rendering true platform components for high-resolution PNG/JPEG exports.
+  - `buildIsometricDiagramPrompt`: 100% deterministic prompt generator synthesizing all verified configuration parameters.
+- **Storage Boundaries**: Retain strict isolation—zero `localStorage` writes on page loads, tab switches, node dragging, 4K canvas export, or AI diagram generation.
+
+#### 5.3 Automated Verification Suite (`scripts/verify-workflow-integration.ts`)
+- Build an end-to-end automated validation runner testing:
+  1. All four workflow transitions (Step 1 -> 2 -> 3 -> 4 -> 1).
+  2. Single source of truth consistency between Step 3 edits and Step 4 canvas.
+  3. Node coordinate preservation during Step 3 parameter modifications.
+  4. Template switch customization protection and cascade link deletion safety.
+  5. Deterministic AI prompt synthesis verifying zero invented values across all 9 tracks.
+  6. 4K canvas generation across all 9 tracks.
+  7. Regression testing of all existing data integrity test cases (18/18).
+
+---
+
+### 6. Verification & Safety Protocol
+
+1. **Compilation & Static Checks**: Run `compile_applet` and `lint_applet` to confirm 0 compilation errors and 0 lint warnings.
+2. **Automated Integration Runner**: Execute `npx tsx scripts/verify-workflow-integration.ts` and `npx tsx scripts/verify-data-integrity.ts`.
+3. **Protected Files**: No edits to `package.json`, `vite.config.ts`, `server.js`, `api/generate-blueprint.js`, or Firebase configs.
