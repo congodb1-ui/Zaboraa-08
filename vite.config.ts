@@ -7,34 +7,43 @@ import { GoogleGenAI } from '@google/genai';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const MODEL = 'gemini-3.1-flash-image';
+const MODEL = 'gemini-3.1-flash-lite-image';
 const FALLBACK_URL =
   '/assets/images/blueprint_3d_isometric_1791610246387.jpg';
 
 async function generateBlueprint(apiKey: string, prompt: string) {
   const ai = new GoogleGenAI({ apiKey });
 
-  const interaction = await ai.interactions.create({
+  const response = await ai.models.generateContent({
     model: MODEL,
-    input: prompt,
-    response_format: {
-      type: 'image',
-      mime_type: 'image/png',
-      aspect_ratio: '16:9',
-      image_size: '2K',
+    contents: prompt,
+    config: {
+      imageConfig: {
+        aspectRatio: '16:9',
+      },
     },
   });
 
-  const generatedImage = interaction.output_image;
+  const parts = response.candidates?.[0]?.content?.parts || [];
+  let base64Data: string | null = null;
+  let mimeType = 'image/png';
 
-  if (!generatedImage?.data) {
+  for (const part of parts) {
+    if (part.inlineData?.data) {
+      base64Data = part.inlineData.data;
+      mimeType = part.inlineData.mimeType || 'image/png';
+      break;
+    }
+  }
+
+  if (!base64Data) {
     throw new Error('The model returned no image data.');
   }
 
   return {
     success: true,
-    imageBase64: generatedImage.data,
-    mimeType: generatedImage.mime_type || 'image/png',
+    imageBase64: base64Data,
+    mimeType,
     model: MODEL,
     prompt,
   };
